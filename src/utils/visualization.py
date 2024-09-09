@@ -40,3 +40,38 @@ def get_num_batches(iterator):
 def create_progress_bar(iterator, desc):
     num_batches = get_num_batches(iterator)
     return tqdm(total=num_batches, desc=desc, bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
+
+############################################################################################################################################################################
+
+# Save exemple through the training
+
+def visualize_rgb_nir(image_rgb_nir):
+    """
+    Visualizes the RGB and NIR images extracted from a 4-channel RGB-NIR image.
+
+    Parameters:
+    - image_rgb_nir: A NumPy array of shape (4, height, width) in uint16.
+    """
+
+    # Extract the BGR channels
+    bgr_image = image_rgb_nir[:3, :, :].transpose(1, 2, 0)
+
+    # Extract the NIR channel
+    nir_image = image_rgb_nir[3, :, :]
+
+    # Plotting the images
+    plt.figure(figsize=(10, 5))
+
+    # Plot the RGB image
+    plt.subplot(1, 2, 1)
+    plt.imshow(bgr_image)
+    plt.title("RGB Image")
+    plt.axis("off")
+
+    # Plot the NIR image
+    plt.subplot(1, 2, 2)
+    plt.imshow(nir_image, cmap='gray')
+    plt.title("NIR Image")
+    plt.axis("off")
+
+    plt.show()

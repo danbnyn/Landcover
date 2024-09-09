@@ -31,20 +31,20 @@ def check_epoch_boundary(iterator, current_epoch):
     if all(i < (current_epoch + 1) * num_records for i in state['last_seen_indices'].values()):
         return False  # Not yet the end of the epoch
 
-
-    # 2. Epoch boundary crossed, update state for the next epoch
-    worker_count = len(state['last_seen_indices'])
-    for i in range(worker_count):
-        state['last_seen_indices'][str(i)] = ((current_epoch + 1) * num_records) - worker_count + i
-    state['last_worker_index'] = worker_count - 1  # Reset worker index
-
-    # Update the DataLoader's state
-    iterator.set_state(json.dumps(state, indent=4).encode())
+    #
+    # # 2. Epoch boundary crossed, update state for the next epoch
+    # worker_count = len(state['last_seen_indices'])
+    # for i in range(worker_count):
+    #     state['last_seen_indices'][str(i)] = ((current_epoch + 1) * num_records) - worker_count + i
+    # state['last_worker_index'] = worker_count - 1  # Reset worker index
+    #
+    # # Update the DataLoader's state
+    # iterator.set_state(json.dumps(state, indent=4).encode())
 
     return True #  Epoch finished
 
 
-@partial(eqx.filter_jit, backend='gpu')
+@partial(eqx.filter_jit, backend='gpu', donate='all')
 def train_step(
         model: eqx.Module,
         state: eqx.nn.State,

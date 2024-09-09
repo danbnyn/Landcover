@@ -13,6 +13,8 @@ data:
   batch_size: 8
   worker_count: 0
   worker_buffer_size: 0
+  shard_bool: False
+  clip_limit: 0.005
 
 training:
   num_epochs: 5
@@ -30,7 +32,6 @@ logging:
   log_dir: "outputs/logs"
   checkpoint_dir: "outputs/checkpoints"
   max_to_keep: 5
-
 
 
 

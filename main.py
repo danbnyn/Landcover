@@ -13,7 +13,7 @@ from src.utils.losses import batch_loss_fn, create_loss_fn, weighted_bce_loss
 from src.data.data_loader import create_iterator
 from src.utils.checkpoint import CheckpointManager
 
-jax.config.update("jax_platform_name", "cpu")
+# jax.config.update("jax_platform_name", "cpu")
 
 def load_config(config_path):
     with open(config_path, 'r') as f:
@@ -28,7 +28,7 @@ def main(config_path):
     # Set up data loaders
     train_iterator = create_iterator(
         data_dir = config['data']['data_directory'],
-        split = 'train',
+        split = 'train[:5%]',
         num_epochs = config['training']['num_epochs'],
         seed = seed,
         batch_size=config['data']['batch_size'],
@@ -37,7 +37,8 @@ def main(config_path):
         original_classes = config['data']['original_classes'],
         classes_to_background= config['data']['classes_to_background'],
         shuffle = True,
-        transforms_bool = True
+        transforms_bool = True,
+        shard_bool = config['data']['shard_bool']
     )
     val_iterator = create_iterator(
         data_dir = config['data']['data_directory'],
@@ -50,7 +51,8 @@ def main(config_path):
         original_classes = config['data']['original_classes'],
         classes_to_background= config['data']['classes_to_background'],
         shuffle = False,
-        transforms_bool = False
+        transforms_bool = False,
+        shard_bool = config['data']['shard_bool']
     )
 
     # Initialize model

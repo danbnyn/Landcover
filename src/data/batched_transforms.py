@@ -1,3 +1,5 @@
+from pickletools import uint8
+
 import jax
 import jax.numpy as jnp
 from functools import partial
@@ -6,9 +8,163 @@ import numpy as np
 from jaxtyping import Array, Float, Int, PyTree, Key
 from jax.image import resize
 import grain.python as grain
+from typing import Tuple
+
+from tensorboardX.summary import image
+
+@partial(jax.jit, backend='cpu', static_argnums=2)
+def _ClaheHistTransformBatched(
+        batched_images: jnp.ndarray,
+        clip_limit: float = 0.005,  # Clip limit now ranges from 0 to 1
+        nbins: int = 4096,
+        max_value: int = 65535
+) -> jnp.ndarray:
+    """
+    Apply a simplified version of CLAHE (without tiling) to batched uint16 RGB satellite images.
+    Clip limit now ranges from 0 to 1 as a fraction of total pixels in the image.
+
+    Args:
+    batched_images: Input batched images as a JAX array with shape (B, H, W, 3) and dtype uint16
+    clip_limit: Fraction of pixels (0 to 1) as threshold for contrast limiting
+    nbins: Number of histogram bins
+    max_value: Maximum value in the input images (65535 for uint16)
+
+    Returns:
+    Equalized batched images as a JAX array with the same shape and dtype as the input
+    """
+
+    def equalize_image(image):
+        def equalize_channel(channel):
+            # Compute histogram for the entire channel
+            hist, _ = jnp.histogram(channel, bins=nbins, range=(0, max_value))
+
+            # Determine the clip limit in terms of pixel count
+            total_pixels = channel.size
+            pixel_clip_limit = clip_limit * total_pixels
+
+            # Clip the histogram based on the calculated pixel clip limit
+            clipped_hist = jnp.minimum(hist, pixel_clip_limit)
+
+            # Compute cumulative distribution function (CDF) for the histogram
+            cdf = jnp.cumsum(clipped_hist)
+            cdf = cdf / cdf[-1]  # Normalize to [0, 1]
+
+            # Apply the equalization
+            equalized_channel = jnp.interp(channel, jnp.linspace(0, max_value, nbins), cdf * max_value)
+
+            return equalized_channel
+
+        # Apply the equalization to each channel independently
+        equalized_channels = jax.vmap(equalize_channel)(image)
+
+        return equalized_channels.astype(jnp.uint16)
+
+    # Apply the equalization to each image in the batch
+    return jax.vmap(equalize_image)(batched_images)
+
+@partial(jax.jit, backend='cpu')
+def _CustomSatelliteImageScalerBatched(
+        arr: Float[Array, "N C H W"],
+        lower_percentile: float = 0,
+        upper_percentile: float = 99.5,
+        target_min: float = 0.0,
+        target_max: float = 1.0
+) -> Float[Array, "N C H W"]:
+    """
+    Applies a custom scaling to satellite images encoded in uint16.
+    This method uses percentile clipping to handle skewed distributions and then applies linear scaling.
+
+    Parameters:
+        arr: Input array with shape (N, C, H, W), where:
+             - N is the batch size
+             - C is the number of channels
+             - H and W are the height and width of the image, respectively.
+        lower_percentile: Lower percentile for clipping (default: 2.0)
+        upper_percentile: Upper percentile for clipping (default: 98.0)
+        target_min: Minimum value of the target range (default: 0.0)
+        target_max: Maximum value of the target range (default: 1.0)
+
+    Returns:
+        Scaled array with the same shape as the input, with values between target_min and target_max.
+    """
+
+    def scale_arr(
+            inner_arr: Float[Array, "H W"]
+    ) -> Float[Array, "H W"]:
+        """
+        Scales a 2D array (H, W) using percentile clipping and linear scaling.
+        """
+        array = inner_arr.astype(jnp.float32)  # Convert to float32 for precision
+
+        # Calculate percentile values for clipping
+        lower_bound = jnp.percentile(array, lower_percentile)
+        upper_bound = jnp.percentile(array, upper_percentile)
+
+        # Clip the array
+        clipped_array = jnp.clip(array, lower_bound, upper_bound)
+
+        # Apply linear scaling to the clipped array
+        scaled = (clipped_array - lower_bound) / (upper_bound - lower_bound)
+
+        # Scale to target range
+        return scaled * (target_max - target_min) + target_min
+
+    # Apply the scaling function across the first two dimensions (N, C) using jax.vmap
+    return jax.vmap(jax.vmap(scale_arr, in_axes=0), in_axes=0)(arr)
 
 
-@partial(jax.jit )
+@partial(jax.jit, backend='cpu')
+def _RobustScaleBatched(
+        arr: Float[Array, "N C H W"]
+) -> Float[Array, "N C H W"]:
+    """
+    Applies robust scaling to each 2D slice of the input 4D array across the last two dimensions (H, W).
+    The scaling is performed independently for each slice, using the interquartile range (IQR) method.
+
+    Parameters:
+        arr: Input array with shape (N, C, H, W), where:
+             - N is the batch size
+             - C is the number of channels
+             - H and W are the height and width of the image, respectively.
+
+    Returns:
+        Scaled array with the same shape as the input.
+    """
+
+    def scale_arr(
+            inner_arr: Float[Array, "H W"]
+    ) -> Float[Array, "H W"]:
+        """
+        Scales a 2D array (H, W) using robust scaling (IQR method).
+
+        Parameters:
+            inner_arr: 2D input array with shape (H, W).
+
+        Returns:
+            Scaled 2D array.
+        """
+        array = inner_arr.astype(jnp.float32)  # Convert to float32 for precision
+
+        # Calculate Q1 (25th percentile) and Q3 (75th percentile)
+        q1 = jnp.percentile(array, 25)
+        q3 = jnp.percentile(array, 75)
+
+        # Calculate IQR (Interquartile Range)
+        iqr = q3 - q1
+
+        # Calculate median
+        median = jnp.median(array)
+
+        # Apply robust scaling
+        scaled = (array - median) / (iqr + 1e-7)  # Add small epsilon for numerical stability
+
+        return scaled
+
+    # Apply the scaling function across the first two dimensions (N, C) using jax.vmap
+    return jax.vmap(jax.vmap(scale_arr, in_axes=0), in_axes=0)(arr)
+
+
+@partial(jax.jit, backend='cpu' )
 def _MinMaxScaleBatched(
     arr: Float[Array, "N C H W"]
 ) -> Float[Array, "N C H W"]:
@@ -46,7 +202,7 @@ def _MinMaxScaleBatched(
     # Apply the scaling function across the first two dimensions (N, C) using jax.vmap
     return jax.vmap(jax.vmap(scale_arr, in_axes=0), in_axes=0)(arr)
 
-@partial(jax.jit, static_argnums=(1,))
+@partial(jax.jit, static_argnums=(1,), backend='cpu')
 def _BinaryEncodeBatched(
         arr: Int[Array, "N H W"],
         num_classes: Int[Array, ""]
@@ -97,7 +253,7 @@ def _BinaryEncodeBatched(
     return encoded.reshape(new_shape)
 
 
-@partial(jax.jit, static_argnums=(1,), )
+@partial(jax.jit, static_argnums=(1,), backend='cpu')
 def _OneHotEncodeBatched(
         arr: Int[Array, "N H W"],
         num_classes: int
@@ -165,7 +321,7 @@ def create_mapping_array(
     return mapping.astype(jnp.uint8)
 
 
-@partial(jax.jit, )
+@partial(jax.jit, backend='cpu')
 def _RemapMasksBatched(
         batch: Int[Array, "N H W"],
         classes_to_background: Int[Array, "M"],
@@ -190,7 +346,7 @@ def _RemapMasksBatched(
 
 
 
-@partial(jax.jit, )
+@partial(jax.jit, backend='cpu')
 def _RandomFlipBatched(
     sample_batch: PyTree[Float[Array, "N ..."]],
     key: Key[Array, ''],
@@ -235,7 +391,7 @@ def _RandomFlipBatched(
 
     return {sample_key[0]: image, sample_key[1]: mask}
 
-@partial(jax.jit, static_argnums=1, )
+@partial(jax.jit, static_argnums=1, backend='cpu')
 def _RandomRotateBatched(
     sample_batch: PyTree[Float[Array, "N ..."]],  # Pytree annotation for the batch of images and masks
     rot_angle: Float[Array, ''],  # Maximum rotation angle in degrees
@@ -414,6 +570,12 @@ def rotate_image(
 
 
 
+class CustomSatelliteImageScaler(grain.MapTransform):
+    def map(self, sample_batch):
+        image_key = list(sample_batch.keys())[0]
+        sample_batch[image_key] = _CustomSatelliteImageScalerBatched(sample_batch[image_key])
+        return sample_batch
+
 # Some transforms
 class MinMaxScaleBatched(grain.MapTransform):
     def map(self, sample_batch):
@@ -421,6 +583,11 @@ class MinMaxScaleBatched(grain.MapTransform):
         sample_batch[image_key] = _MinMaxScaleBatched(sample_batch[image_key])
         return sample_batch
 
+class RobustScaleBatched(grain.MapTransform):
+    def map(self, sample_batch):
+        image_key = list(sample_batch.keys())[0]
+        sample_batch[image_key] = _RobustScaleBatched(sample_batch[image_key])
+        return sample_batch
 
 class BinaryEncodeBatched(grain.MapTransform):
     def __init__(self, num_classes):
@@ -475,3 +642,13 @@ class RandomFlipBatched(grain.MapTransform):
     def map(self, sample_batch):
         return _RandomFlipBatched(sample_batch, self.key, self.p)
 
+
+class ClaheHistTransformBatched(grain.MapTransform):
+    def __init__(self, clip_limit):
+        self.clip_limit = clip_limit
+
+    def map(self, sample_batch):
+        image_key = list(sample_batch.keys())[0]
+        nbins = np.floor(jnp.mean(jnp.mean(jnp.percentile(sample_batch[image_key], 98, axis=(2, 3)) - jnp.percentile(sample_batch[image_key], 0, axis=(2, 3)), axis=1))).astype(int)
+        sample_batch[image_key] = _ClaheHistTransformBatched(sample_batch[image_key], nbins=nbins, clip_limit=self.clip_limit)
+        return sample_batch
