@@ -4,10 +4,29 @@ import tensorflow_datasets as tfds
 from src.data.transforms import MinMaxScale, BinaryEncode, OneHotEncode, RemapMasks, RandomRotate, RandomFlip, ToJax
 from src.data.batched_transforms import MinMaxScaleBatched, BinaryEncodeBatched, OneHotEncodeBatched, RemapMasksBatched, \
     RandomRotateBatched, RandomFlipBatched, RobustScaleBatched, CustomSatelliteImageScaler, ClaheHistTransformBatched
+from grain.python import ShardOptions
+import os
 
+class ShardByJaxProcessCustomBackend(ShardOptions):
+  """Shards the data across JAX processes on TPU backend."""
+
+  def __init__(self, drop_remainder: bool = False):
+    # pylint: disable=g-import-not-at-top
+    import jax  # pytype: disable=import-error
+    # pylint: enable=g-import-not-at-top
+    super().__init__(
+        shard_index=jax.process_index('tpu'),
+        shard_count=jax.process_count('tpu'),
+        drop_remainder=drop_remainder,
+    )
 
 def create_iterator(data_dir, split, num_epochs, seed, batch_size, worker_count, worker_buffer_size, original_classes, classes_to_background, shuffle, transforms_bool, shard_bool, clip_limit):
     builder = tfds.builder_from_directory(data_dir)
+
+    # jax.config.update("jax_platform_name", "cpu")
+
+    # os.environ['JAX_PLATFORMS'] = 'cpu'
+
 
     # Define the sampler
     key = jax.random.key(seed)
@@ -18,7 +37,7 @@ def create_iterator(data_dir, split, num_epochs, seed, batch_size, worker_count,
         sharding = grain.NoSharding()
 
     else :
-        sharding = grain.ShardByJaxProcess(drop_remainder=True)
+        sharding = ShardByJaxProcessCustomBackend(drop_remainder=True)
 
 
     sampler = grain.IndexSampler(
@@ -34,7 +53,7 @@ def create_iterator(data_dir, split, num_epochs, seed, batch_size, worker_count,
 
     transformations = [
         grain.Batch(batch_size, drop_remainder=True),
-        ClaheHistTransformBatched(clip_limit),
+        # ClaheHistTransformBatched(clip_limit),
         MinMaxScaleBatched(),
         RemapMasksBatched(original_classes, classes_to_background),
         OneHotEncodeBatched(len(RemapMasks(original_classes, classes_to_background).remaining_classes) + 1),
@@ -44,7 +63,7 @@ def create_iterator(data_dir, split, num_epochs, seed, batch_size, worker_count,
         transformations = [
             grain.Batch(batch_size, drop_remainder=True),
             MinMaxScaleBatched(),
-            ClaheHistTransformBatched(clip_limit),
+            # ClaheHistTransformBatched(clip_limit),
             RemapMasksBatched(original_classes, classes_to_background),
             RandomFlipBatched(random_transforms_keys[0], 0.5),
             RandomRotateBatched(random_transforms_keys[1], p=0.5, rot_angle=10),

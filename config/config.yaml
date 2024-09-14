@@ -7,18 +7,18 @@ model:
 
 
 data:
-  data_directory: 'data/dataset/sentinel2_landcover/1.0.0/'
+  data_directory: '../dataset/1.0.0/'
   original_classes: [0,1,2,3,4,5,6,7,8,9]
   classes_to_background: [0, 1]
-  batch_size: 8
+  batch_size: 16
   worker_count: 0
   worker_buffer_size: 0
-  shard_bool: False
+  shard_bool: True
   clip_limit: 0.005
 
 training:
   num_epochs: 5
-  learning_rate: 0.001
+  learning_rate: 0.0001
   weight_decay: 0.0001
 
 optimizer:

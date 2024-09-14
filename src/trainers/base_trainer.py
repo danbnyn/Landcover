@@ -5,6 +5,7 @@ import tensorboardX.writer
 from src.models.resunet import ResUnet
 import equinox as eqx
 import jax
+from jax.experimental.mesh_utils import create_device_mesh
 import optax
 import jax.numpy as jnp
 import grain.python as grain
@@ -15,7 +16,7 @@ from jaxtyping import Array, Float, Int, PyTree
 from src.utils.visualization import create_progress_bar
 import json
 import re
-
+import numpy as np
 
 def check_epoch_boundary(iterator, current_epoch):
     """
@@ -43,8 +44,7 @@ def check_epoch_boundary(iterator, current_epoch):
 
     return True #  Epoch finished
 
-
-@partial(eqx.filter_jit, backend='gpu', donate='all')
+@partial(eqx.filter_jit)
 def train_step(
         model: eqx.Module,
         state: eqx.nn.State,
@@ -54,8 +54,9 @@ def train_step(
         optimizer: optax.GradientTransformation,
         batch_loss_fn: Callable,
         loss_fn: Callable,
-        weights: Float[Array, "C"],
+        weights: Float[Array, "C"]
 ):
+
     (loss_value, new_state), grads = eqx.filter_value_and_grad(batch_loss_fn, has_aux=True)(model,state, inputs, targets, weights, loss_fn) # Compute the loss and the gradients, while keeping track of the state
 
     updates, new_opt_state = optimizer.update(grads, opt_state, params=eqx.filter(model, eqx.is_array))
@@ -80,12 +81,29 @@ def train_epoch(
 
     progress_bar = create_progress_bar(train_iterator, "Training")
 
+    num_devices = len(jax.devices("tpu"))
+    mesh_shape = (num_devices,)
+    devices = np.array(jax.devices('tpu')).reshape(mesh_shape)
+    mesh = jax.sharding.Mesh(devices, ('batch'))
+    sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec('batch'))
+
+    sharding_model = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+
+
+    model, opt_state = eqx.filter_shard((model, opt_state), sharding_model)
 
     for batch in train_iterator :
         if check_epoch_boundary(train_iterator, current_epoch):
             break
 
         inputs, targets = batch.values()
+
+        # Move data to devices before sharding
+        inputs = jax.device_put(inputs, sharding)
+        targets = jax.device_put(targets, sharding)
+
+        # Apply sharding constraints
+        inputs, targets = eqx.filter_shard((inputs, targets), sharding)
 
         model, state, opt_state, loss_value = train_step(
             model, state, opt_state, inputs, targets, optimizer, batch_loss_fn, loss_fn, weights
@@ -96,12 +114,14 @@ def train_epoch(
         progress_bar.update(1)
 
     progress_bar.close()
+
     avg_loss = total_loss / num_batches
 
 
     return model, state, opt_state, avg_loss
 
-@partial(eqx.filter_jit, backend='gpu')
+
+@partial(eqx.filter_jit, backend='tpu')
 def validate_step(
     model: eqx.Module,
     state: eqx.nn.State,

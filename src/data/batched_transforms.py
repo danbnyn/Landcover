@@ -12,7 +12,7 @@ from typing import Tuple
 
 from tensorboardX.summary import image
 
-@partial(jax.jit, backend='cpu', static_argnums=2)
+@partial(jax.jit, static_argnums=2)
 def _ClaheHistTransformBatched(
         batched_images: jnp.ndarray,
         clip_limit: float = 0.005,  # Clip limit now ranges from 0 to 1
@@ -62,7 +62,7 @@ def _ClaheHistTransformBatched(
     # Apply the equalization to each image in the batch
     return jax.vmap(equalize_image)(batched_images)
 
-@partial(jax.jit, backend='cpu')
+@partial(jax.jit)
 def _CustomSatelliteImageScalerBatched(
         arr: Float[Array, "N C H W"],
         lower_percentile: float = 0,
@@ -113,7 +113,7 @@ def _CustomSatelliteImageScalerBatched(
     return jax.vmap(jax.vmap(scale_arr, in_axes=0), in_axes=0)(arr)
 
 
-@partial(jax.jit, backend='cpu')
+@partial(jax.jit)
 def _RobustScaleBatched(
         arr: Float[Array, "N C H W"]
 ) -> Float[Array, "N C H W"]:
@@ -164,7 +164,7 @@ def _RobustScaleBatched(
     return jax.vmap(jax.vmap(scale_arr, in_axes=0), in_axes=0)(arr)
 
 
-@partial(jax.jit, backend='cpu' )
+@partial(jax.jit)
 def _MinMaxScaleBatched(
     arr: Float[Array, "N C H W"]
 ) -> Float[Array, "N C H W"]:
@@ -253,7 +253,7 @@ def _BinaryEncodeBatched(
     return encoded.reshape(new_shape)
 
 
-@partial(jax.jit, static_argnums=(1,), backend='cpu')
+@partial(jax.jit, static_argnums=(1,))
 def _OneHotEncodeBatched(
         arr: Int[Array, "N H W"],
         num_classes: int
@@ -346,7 +346,7 @@ def _RemapMasksBatched(
 
 
 
-@partial(jax.jit, backend='cpu')
+@partial(jax.jit)
 def _RandomFlipBatched(
     sample_batch: PyTree[Float[Array, "N ..."]],
     key: Key[Array, ''],
@@ -391,7 +391,7 @@ def _RandomFlipBatched(
 
     return {sample_key[0]: image, sample_key[1]: mask}
 
-@partial(jax.jit, static_argnums=1, backend='cpu')
+@partial(jax.jit, static_argnums=1)
 def _RandomRotateBatched(
     sample_batch: PyTree[Float[Array, "N ..."]],  # Pytree annotation for the batch of images and masks
     rot_angle: Float[Array, ''],  # Maximum rotation angle in degrees

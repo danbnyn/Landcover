@@ -28,7 +28,7 @@ def main(config_path):
     # Set up data loaders
     train_iterator = create_iterator(
         data_dir = config['data']['data_directory'],
-        split = 'train[:5%]',
+        split = 'train',
         num_epochs = config['training']['num_epochs'],
         seed = seed,
         batch_size=config['data']['batch_size'],
@@ -38,7 +38,8 @@ def main(config_path):
         classes_to_background= config['data']['classes_to_background'],
         shuffle = True,
         transforms_bool = True,
-        shard_bool = config['data']['shard_bool']
+        shard_bool = config['data']['shard_bool'],
+        clip_limit=config['data']['clip_limit']
     )
     val_iterator = create_iterator(
         data_dir = config['data']['data_directory'],
@@ -52,7 +53,8 @@ def main(config_path):
         classes_to_background= config['data']['classes_to_background'],
         shuffle = False,
         transforms_bool = False,
-        shard_bool = config['data']['shard_bool']
+        shard_bool = config['data']['shard_bool'],
+        clip_limit=config['data']['clip_limit']
     )
 
     # Initialize model
