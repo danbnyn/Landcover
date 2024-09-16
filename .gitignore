@@ -1,0 +1,6 @@
+.venv/
+**/__pycache__/
+.*/
+tests/test.py
+outputs/visualization/*
+outputs/logs/*

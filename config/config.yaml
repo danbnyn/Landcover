@@ -14,7 +14,6 @@ data:
   worker_count: 0
   worker_buffer_size: 0
   shard_bool: True
-  clip_limit: 0.005
 
 training:
   num_epochs: 5
@@ -22,7 +21,7 @@ training:
   weight_decay: 0.0001
 
 optimizer:
-  name: "adam"
+  name: "adamw"
 
 loss:
   name: "weighted_bce_loss"

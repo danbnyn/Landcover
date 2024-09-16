@@ -9,10 +9,13 @@ sudo apt-get install -y -qq python3.12-full python3.12-dev
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended 
 sudo chsh $USER -s /usr/bin/zsh
 
-2. Config the venv 
+2. Git clone 
 
-python3.12 -m venv ~/venv
-. ~/venv/bin/activate
+
+3. Config the venv 
+
+python3.12 -m venv ~/Landcover/.venv
+. ~/Landcover/.venv/bin/activate
 pip install -U pip
 pip install -U wheel
 pip install -U "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
@@ -23,9 +26,14 @@ pip install -U tqdm
 pip install -U typing 
 pip install -U tensorflow_datasets
 pip install -U PyYAML
-pip install tensorflow tensorboard-plugin-profile # For profiling, if you dont want tensorboard profiling for jax, just skip
+pip install -U pytest pytest-benchmark
+pip install -U tensorboardX
+pip install -U matplotlib
+pip install -U tensorflow tensorboard-plugin-profile 
 
-3. Mount the dataset
+# For profiling, if you dont want tensorboard profiling for jax, just skip
+
+4. Mount the dataset
 
 login : gcloud auth application-default login
 
@@ -38,7 +46,16 @@ install google fuse
     sudo apt-get install fuse gcsfuse
     gcsfuse -v
 
-mkdir "$HOME/dataset"
-gcsfuse --implicit-dirs s2glc_array_records "$HOME/dataset"
+sudo mkdir "$HOME/dataset"
+sudo chmod 777 "$HOME/dataset"
+gcsfuse --implicit-dirs --implicit-dirs --file-mode 777 --dir-mode 777 --uid=0 --gid=0 s2glc_array_records "$HOME/dataset"
 
-4. Mount the logs dir 
+
+5. Mount the logs dir 
+
+
+TODO : 
+- Clean up the metrics and tensorboard profiling / logs
+- Add visualization to the training to track the progress between epochs
+- Add more unit tests to ensure every module is working as expected especially the sharding between the TPU cores
+- If everything is working as expected move on to DDPM and try to implement it in JAX

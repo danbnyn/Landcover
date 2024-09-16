@@ -39,7 +39,6 @@ def main(config_path):
         shuffle = True,
         transforms_bool = True,
         shard_bool = config['data']['shard_bool'],
-        clip_limit=config['data']['clip_limit']
     )
     val_iterator = create_iterator(
         data_dir = config['data']['data_directory'],
@@ -54,7 +53,6 @@ def main(config_path):
         shuffle = False,
         transforms_bool = False,
         shard_bool = config['data']['shard_bool'],
-        clip_limit=config['data']['clip_limit']
     )
 
     # Initialize model

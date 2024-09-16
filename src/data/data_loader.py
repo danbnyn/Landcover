@@ -1,8 +1,7 @@
 import jax
 import grain.python as grain
 import tensorflow_datasets as tfds
-from src.data.transforms import MinMaxScale, BinaryEncode, OneHotEncode, RemapMasks, RandomRotate, RandomFlip, ToJax
-from src.data.batched_transforms import MinMaxScaleBatched, BinaryEncodeBatched, OneHotEncodeBatched, RemapMasksBatched, \
+from src.data.transforms import MinMaxScaleBatched, BinaryEncodeBatched, OneHotEncodeBatched, RemapMasksBatched, \
     RandomRotateBatched, RandomFlipBatched, RobustScaleBatched, CustomSatelliteImageScaler, ClaheHistTransformBatched
 from grain.python import ShardOptions
 import os
@@ -20,7 +19,7 @@ class ShardByJaxProcessCustomBackend(ShardOptions):
         drop_remainder=drop_remainder,
     )
 
-def create_iterator(data_dir, split, num_epochs, seed, batch_size, worker_count, worker_buffer_size, original_classes, classes_to_background, shuffle, transforms_bool, shard_bool, clip_limit):
+def create_iterator(data_dir, split, num_epochs, seed, batch_size, worker_count, worker_buffer_size, original_classes, classes_to_background, shuffle, transforms_bool, shard_bool):
     builder = tfds.builder_from_directory(data_dir)
 
     # jax.config.update("jax_platform_name", "cpu")
@@ -53,32 +52,20 @@ def create_iterator(data_dir, split, num_epochs, seed, batch_size, worker_count,
 
     transformations = [
         grain.Batch(batch_size, drop_remainder=True),
-        # ClaheHistTransformBatched(clip_limit),
-        MinMaxScaleBatched(),
+        CustomSatelliteImageScaler(0, 99.85),
         RemapMasksBatched(original_classes, classes_to_background),
-        OneHotEncodeBatched(len(RemapMasks(original_classes, classes_to_background).remaining_classes) + 1),
+        OneHotEncodeBatched(len(RemapMasksBatched(original_classes, classes_to_background).remaining_classes) + 1),
     ]
 
     if transforms_bool :
         transformations = [
             grain.Batch(batch_size, drop_remainder=True),
-            MinMaxScaleBatched(),
-            # ClaheHistTransformBatched(clip_limit),
+            CustomSatelliteImageScaler(0, 99.85),
             RemapMasksBatched(original_classes, classes_to_background),
             RandomFlipBatched(random_transforms_keys[0], 0.5),
             RandomRotateBatched(random_transforms_keys[1], p=0.5, rot_angle=10),
-            OneHotEncodeBatched(len(RemapMasks(original_classes, classes_to_background).remaining_classes) + 1),
+            OneHotEncodeBatched(len(RemapMasksBatched(original_classes, classes_to_background).remaining_classes) + 1),
         ]
-
-    # transformations = [
-    #     RemapMasks(original_classes, classes_to_background),
-    #     RandomFlip(key, 0.5),
-    #     RandomRotate(random_transforms_keys[1], p=0.5, rot_angle=10),
-    #     OneHotEncode(len(RemapMasks(original_classes, classes_to_background).remaining_classes)+1),
-    #     MinMaxScale(),
-    #     grain.Batch(batch_size),
-    #     ToJax(),
-    # ]
 
     # Create the dataloader
     data_loader = grain.DataLoader(
