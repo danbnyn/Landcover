@@ -134,3 +134,21 @@ def visualize_mask(mask, save_name):
 
     # Optionally close the plot to free up resources (especially useful in scripts)
     plt.close()
+
+
+def save_visualizations(image_rgb_nir, mask, save_name, mask_encoding):
+    """
+    Saves visualizations of the RGB-NIR image, mask
+    Parameters:
+    - image_rgb_nir: A NumPy array of shape (4, height, width) in uint16.
+    - mask: A NumPy array of shape (height, width) in uint8.
+    """
+
+    # Visualize the RGB and NIR images
+    visualize_rgb_nir(image_rgb_nir, save_name)
+
+    # Visualize the histograms
+    visualize_hist(image_rgb_nir, save_name)
+
+    # Visualize the mask
+    visualize_mask(mask, save_name)

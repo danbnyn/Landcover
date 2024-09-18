@@ -10,8 +10,10 @@ from jax.image import resize
 import grain.python as grain
 from typing import Tuple
 
-from tensorboardX.summary import image
 
+####################################################################################################
+# Transforms Function 
+####################################################################################################
 
 @partial(jax.jit, static_argnums=2)
 def _ClaheHistTransformBatched(
@@ -110,7 +112,6 @@ def _CustomSatelliteImageScalerBatched(
     # Apply the scaling function across the first two dimensions (N, C) using jax.vmap
     return jax.vmap(jax.vmap(scale_arr, in_axes=0), in_axes=0)(arr)
 
-
 @partial(jax.jit)
 def _RobustScaleBatched(
         arr: Float[Array, "N C H W"]
@@ -160,7 +161,6 @@ def _RobustScaleBatched(
 
     # Apply the scaling function across the first two dimensions (N, C) using jax.vmap
     return jax.vmap(jax.vmap(scale_arr, in_axes=0), in_axes=0)(arr)
-
 
 @partial(jax.jit)
 def _MinMaxScaleBatched(
@@ -250,7 +250,6 @@ def _BinaryEncodeBatched(
     new_shape = original_shape + (num_bin_classes,)
     return encoded.reshape(new_shape)
 
-
 @partial(jax.jit, static_argnums=(1,))
 def _OneHotEncodeBatched(
         arr: Int[Array, "N H W"],
@@ -289,7 +288,6 @@ def _OneHotEncodeBatched(
     # Transpose to get the output shape (N, C, H, W)
     return jnp.transpose(one_hot_encoded, (0, 3, 1, 2))
 
-
 def create_mapping_array(
         classes_to_ignore: Int[Array, "M"],
         classes: Int[Array, "N"]
@@ -318,7 +316,6 @@ def create_mapping_array(
 
     return mapping.astype(jnp.uint8)
 
-
 @partial(jax.jit)
 def _RemapMasksBatched(
         batch: Int[Array, "N H W"],
@@ -341,8 +338,6 @@ def _RemapMasksBatched(
 
     # Apply the mapping to the batch of masks
     return mapping_array[batch]  # JAX automatically broadcasts the mapping array to the shape of the batch
-
-
 
 @partial(jax.jit)
 def _RandomFlipBatched(
@@ -545,8 +540,34 @@ def rotate_image(
 
     return rotated_image
 
+def reverse_one_hot_encode(arr: Int[Array, "N C H W"]) -> Int[Array, "N H W"]:
+    """
+    Reverse the one-hot encoding of an array to recover the original class indices.
+
+    Args:
+        arr (Array): One-hot encoded array with shape (N, C, H, W).
+
+    Returns:
+        Array: Array of class indices with shape (N, H, W).
+    """
+    return jnp.argmax(arr, axis=1)
+
+def reverse_binary_encode(arr: Int[Array, "N ... H W"]) -> Int[Array, "N H W"]:
+    """
+    Reverse the binary encoding of an array to recover the original class indices.
+
+    Args:
+        arr (Array): Binary encoded array with shape (N, C, H, W).
+
+    Returns:
+        Array: Array of class indices with shape (N, H, W).
+    """
+    # Look at each pixel in H, W over all channels and convert binary to decimal
+    return jnp.sum(arr * 2 ** jnp.arange(arr.shape[1])[::-1], axis=1)
+
+
 ####################################################################################################
-# Custom Batched Transforms
+# Transforms Class for the iterator
 ####################################################################################################
 
 class CustomSatelliteImageScaler(grain.MapTransform):

@@ -51,7 +51,14 @@ sudo chmod 777 "$HOME/dataset"
 gcsfuse --implicit-dirs --implicit-dirs --file-mode 777 --dir-mode 777 --uid=0 --gid=0 s2glc_array_records "$HOME/dataset"
 
 
-5. Mount the logs dir 
+5. Mount the outputs dir 
+sudo mkdir "$HOME/Landcover/outputs"
+sudo chmod 777 "$HOME/Landcover/outputs"
+gcsfuse --implicit-dirs --implicit-dirs --file-mode 777 --dir-mode 777 --uid=0 --gid=0 s2glc_logs "$HOME/Landcover/logs"
+
+6. Load tensorboard
+
+tensorboard --logdir="$HOME/Landcover/logs" --port=6006
 
 
 TODO : 

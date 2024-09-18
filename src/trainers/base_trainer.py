@@ -1,6 +1,7 @@
 from functools import partial
 
-import tensorboardX.writer
+from datetime import datetime
+import tensorflow as tf
 
 from src.models.resunet import ResUnet
 import equinox as eqx
@@ -17,6 +18,10 @@ from src.utils.visualization import create_progress_bar
 import json
 import re
 import numpy as np
+from src.data.transforms import _OneHotEncodeBatched
+from src.utils.metrics import Metric, get_metrics
+from typing import List, Any, Union, Optional
+from src.utils.metrics import log_metrics
 
 def check_epoch_boundary(iterator, current_epoch):
     """
@@ -56,17 +61,26 @@ def train_step(
         loss_fn: Callable,
         weights: Float[Array, "C"]
 ):
+    """
+    Performs a single training step: forward pass, loss computation, gradient computation, and parameter update.
 
-    (loss_value, new_state), grads = eqx.filter_value_and_grad(batch_loss_fn, has_aux=True)(model,state, inputs, targets, weights, loss_fn) # Compute the loss and the gradients, while keeping track of the state
+    Returns:
+        Tuple containing updated model, state, optimizer state, and loss value.
+    """
+    (loss_value, new_state), grads = eqx.filter_value_and_grad(
+        batch_loss_fn, has_aux=True
+    )(model, state, inputs, targets, weights, loss_fn)  # Compute loss and gradients
 
-    updates, new_opt_state = optimizer.update(grads, opt_state, params=eqx.filter(model, eqx.is_array))
+    updates, new_opt_state = optimizer.update(
+        grads, opt_state, params=eqx.filter(model, eqx.is_array)
+    )
 
     new_model = eqx.apply_updates(model, updates)
 
     return new_model, new_state, new_opt_state, loss_value
 
 def train_epoch(
-        model: ResUnet,
+        model: eqx.Module,
         state: eqx.nn.State,
         opt_state: optax.OptState,
         train_iterator: grain.PyGrainDatasetIterator,
@@ -75,36 +89,33 @@ def train_epoch(
         loss_fn: Callable,
         weights: jnp.ndarray,
         current_epoch: int,
-) -> Tuple[ResUnet, eqx.nn.State, optax.OptState, float]:
+        sharding: jax.sharding.NamedSharding,
+):
+    """
+    Executes one epoch of training.
+
+    Returns:
+        Tuple containing updated model, state, optimizer state, and average loss.
+    """
     total_loss = 0.0
     num_batches = 0
 
     progress_bar = create_progress_bar(train_iterator, "Training")
 
-    num_devices = len(jax.devices("tpu"))
-    mesh_shape = (num_devices,)
-    devices = np.array(jax.devices('tpu')).reshape(mesh_shape)
-    mesh = jax.sharding.Mesh(devices, ('batch'))
-    sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec('batch'))
-
-    sharding_model = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-
-
-    model, opt_state = eqx.filter_shard((model, opt_state), sharding_model)
-
-    for batch in train_iterator :
+    for batch in train_iterator:
         if check_epoch_boundary(train_iterator, current_epoch):
             break
 
         inputs, targets = batch.values()
 
-        # Move data to devices before sharding
+        # Move data to devices based on sharding
         inputs = jax.device_put(inputs, sharding)
         targets = jax.device_put(targets, sharding)
 
         # Apply sharding constraints
         inputs, targets = eqx.filter_shard((inputs, targets), sharding)
 
+        # Perform a training step
         model, state, opt_state, loss_value = train_step(
             model, state, opt_state, inputs, targets, optimizer, batch_loss_fn, loss_fn, weights
         )
@@ -117,9 +128,7 @@ def train_epoch(
 
     avg_loss = total_loss / num_batches
 
-
     return model, state, opt_state, avg_loss
-
 
 @partial(eqx.filter_jit, backend='tpu')
 def validate_step(
@@ -130,14 +139,18 @@ def validate_step(
     loss_fn: Callable,
     weights: Float[Array, "C"],
 ) -> Float[Array, ""]:
+    """
+    Performs a single validation step: forward pass and loss computation.
 
+    Returns:
+        Computed loss.
+    """
     batch_model = jax.vmap(
         model, axis_name='batch', in_axes=(0, None), out_axes=(0, None)
     )
     y_pred, _ = batch_model(inputs, state)
     loss = loss_fn(y_pred, targets, weights)
-    return loss
-
+    return y_pred ,loss
 
 def validate(
     model: eqx.Module,
@@ -146,7 +159,30 @@ def validate(
     loss_fn: Callable,
     weights: Float[Array, "C"],
     current_epoch: int,
-) -> float:
+    sharding: jax.sharding.NamedSharding,
+    num_classes: int,
+    metric_names: List[str]  # List of metric class names
+) -> Dict[str, Any]:
+    """
+    Executes the validation loop and computes performance metrics.
+
+    Args:
+        model (eqx.Module): The neural network model.
+        state (eqx.nn.State): The state associated with the model.
+        val_iterator (grain.PyGrainDatasetIterator): Validation data iterator.
+        loss_fn (Callable): Loss function.
+        weights (Float[Array, "C"]): Class weights for loss computation.
+        current_epoch (int): Current epoch number.
+        sharding (jax.sharding.NamedSharding): Sharding configuration.
+        num_classes (int): Number of classes.
+        metric_names (List[str]): List of metric class names to compute.
+
+    Returns:
+        Dict[str, Any]: Dictionary containing all computed metrics.
+    """
+    # Initialize metrics
+    metrics: List[Metric] = get_metrics(metric_names, num_classes)
+
     total_loss = 0.0
     num_batches = 0
 
@@ -157,20 +193,50 @@ def validate(
             break
 
         inputs, targets = batch.values()
-        loss_value = validate_step(model, state, inputs, targets, loss_fn, weights)
+
+        # Move data to devices based on sharding
+        inputs = jax.device_put(inputs, sharding)
+        targets = jax.device_put(targets, sharding)
+
+        # Apply sharding constraints
+        inputs, targets = eqx.filter_shard((inputs, targets), sharding)
+
+        # Perform a validation step
+        y_pred, loss_value = validate_step(model, state, inputs, targets, loss_fn, weights)
+
+        y_pred_cls = jnp.argmax(y_pred, axis=1)  # Shape: (N, H, W)
+
+        y_pred = _OneHotEncodeBatched(y_pred_cls, num_classes)  # Shape: (N, C, H, W)
+
+        y_pred = jax.device_put(y_pred, sharding)
+
+        # Update all metrics
+        for metric in metrics:
+            metric.update(y_pred, targets)
 
         total_loss += loss_value
         num_batches += 1
         progress_bar.update(1)
 
     progress_bar.close()
-    avg_loss = total_loss / num_batches
-    return avg_loss
+
+    # Compute all metrics
+    final_metrics: Dict[str, Any] = {}
+    for metric in metrics:
+        metric_results = metric.compute()
+        final_metrics.update(metric_results)
+
+    # Compute average loss
+    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+    final_metrics["Loss"] = avg_loss
+
+    return final_metrics
 
 
 def train_model(
     model: ResUnet,
     state: eqx.nn.State,
+    opt_state: optax.OptState,
     train_iterator: grain.PyGrainDatasetIterator,
     val_iterator: grain.PyGrainDatasetIterator,
     optimizer: optax.GradientTransformation,
@@ -179,30 +245,87 @@ def train_model(
     weights: jnp.ndarray,
     num_epochs: int,
     checkpoint_manager: CheckpointManager,
-    writer: tensorboardX.writer.SummaryWriter
+    train_writer: tf.summary.SummaryWriter,
+    val_writer: tf.summary.SummaryWriter,
+    sharding: jax.sharding.NamedSharding,  # Sharding configuration
+    num_classes: int,  # Number of classes
+    metric_names: List[str],  # List of metric class names
+    class_names: Optional[List[str]] = None,  # Optional: List of class names for labeling
 ):
-    opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
+    """
+    Orchestrates the training and validation process over multiple epochs.
 
+    Args:
+        model (ResUnet): The neural network model.
+        state (eqx.nn.State): The state associated with the model.
+        opt_state (optax.OptState): The optimizer state.
+        train_iterator (grain.PyGrainDatasetIterator): Training data iterator.
+        val_iterator (grain.PyGrainDatasetIterator): Validation data iterator.
+        optimizer (optax.GradientTransformation): The optimizer.
+        batch_loss_fn (Callable): Function to compute batch loss.
+        loss_fn (Callable): Function to compute loss.
+        weights (jnp.ndarray): Class weights for loss computation.
+        num_epochs (int): Number of training epochs.
+        checkpoint_manager (CheckpointManager): Manager for saving checkpoints.
+        train_writer (tf.summary.SummaryWriter): TensorBoard writer for training.
+        val_writer (tf.summary.SummaryWriter): TensorBoard writer for validation.
+        sharding (jax.sharding.NamedSharding): Sharding configuration.
+        num_classes (int): Number of classes.
+        metric_names (List[str]): List of metric class names to compute.
+        class_names (List[str], optional): List of class names for labeling. Defaults to None.
+    """
     best_val_loss = float('inf')
     epochs_without_improvement = 0
 
     epoch_progress = tqdm(range(num_epochs), desc="Epochs", position=0)
 
     for epoch in epoch_progress:
-        # Training
+        # Training Phase
         model, state, opt_state, train_loss = train_epoch(
-            model, state, opt_state, train_iterator, optimizer, batch_loss_fn, loss_fn, weights, epoch
+            model, 
+            state, 
+            opt_state, 
+            train_iterator, 
+            optimizer, 
+            batch_loss_fn, 
+            loss_fn,
+            weights, 
+            epoch, 
+            sharding
         )
 
+        # Validation Phase
+        final_metrics = validate(
+            model=model,
+            state=state,
+            val_iterator=val_iterator,
+            loss_fn=loss_fn,
+            weights=weights,
+            current_epoch=epoch,
+            sharding=sharding,
+            num_classes=num_classes,
+            metric_names=metric_names
+        )
 
-        # Validation
-        val_loss = validate(model, state, val_iterator, loss_fn, weights, epoch)
+        val_loss = final_metrics.get("Loss", 0.0)
 
-        # Logging
-        writer.add_scalar('Loss/train', train_loss, epoch)
-        writer.add_scalar('Loss/val', val_loss, epoch)
+        # Logging using TensorBoard via log_metrics
+        log_metrics(
+            metrics=final_metrics,
+            writer=val_writer,
+            step=epoch,
+            class_names=class_names
+        )
 
-        epoch_progress.set_postfix({'Train Loss': f'{train_loss:.4f}', 'Val Loss': f'{val_loss:.4f}'})
+        # Logging Training Loss separately
+        with train_writer.as_default():
+            tf.summary.scalar('Train Loss', train_loss, step=epoch)
+
+        # Update progress bar with metrics
+        epoch_progress.set_postfix({
+            'Train Loss': f'{train_loss:.4f}',
+            'Val Loss': f'{val_loss:.4f}',
+        })
 
         # Checkpointing
         if val_loss < best_val_loss:
@@ -213,7 +336,12 @@ def train_model(
         else:
             epochs_without_improvement += 1
 
+        # patience = config['training']['patience']
+        # if epochs_without_improvement >= patience:
+        #     print("Early stopping triggered.")
+        #     break
+
+        # TODO: Save visualizations of the model's predictions
 
     epoch_progress.close()
-    writer.close()
-    return model, state
+    print("Training completed.")
