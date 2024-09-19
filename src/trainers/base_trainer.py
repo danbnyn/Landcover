@@ -1,7 +1,9 @@
 from functools import partial
 
 from datetime import datetime
-import tensorflow as tf
+
+from tensorboardX import SummaryWriter
+
 
 from src.models.resunet import ResUnet
 import equinox as eqx
@@ -22,8 +24,9 @@ from src.data.transforms import _OneHotEncodeBatched
 from src.utils.metrics import Metric, get_metrics
 from typing import List, Any, Union, Optional
 from src.utils.metrics import log_metrics
+from src.utils.visualization import log_sample_visualizations
 
-def check_epoch_boundary(iterator, current_epoch):
+def check_epoch_boundary(iterator, current_epoch, batch_size):
     """
     Checks for the end of an epoch within a data loader iteration and updates the state accordingly.
 
@@ -33,10 +36,9 @@ def check_epoch_boundary(iterator, current_epoch):
     state = json.loads(iterator.get_state().decode('utf-8'))
     num_records = int(re.search(r'num_records=(\d+)', state['sampler']).group(1)) # regex to find
 
-    # 1. Check if we've crossed into the next epoch
-    if all(i < (current_epoch + 1) * num_records for i in state['last_seen_indices'].values()):
-        return False  # Not yet the end of the epoch
-
+    # check if adding a batch to the current step will cross the epoch boundary
+    if any([state['last_seen_indices'][str(i)] + batch_size >= (current_epoch + 1) * num_records for i in range(len(state['last_seen_indices']))]):
+        return True
     #
     # # 2. Epoch boundary crossed, update state for the next epoch
     # worker_count = len(state['last_seen_indices'])
@@ -47,7 +49,7 @@ def check_epoch_boundary(iterator, current_epoch):
     # # Update the DataLoader's state
     # iterator.set_state(json.dumps(state, indent=4).encode())
 
-    return True #  Epoch finished
+    return False #  Epoch finished
 
 @partial(eqx.filter_jit)
 def train_step(
@@ -103,7 +105,10 @@ def train_epoch(
     progress_bar = create_progress_bar(train_iterator, "Training")
 
     for batch in train_iterator:
-        if check_epoch_boundary(train_iterator, current_epoch):
+
+        batch_size = list(batch.values())[0].shape[0]
+
+        if check_epoch_boundary(train_iterator, current_epoch, batch_size):
             break
 
         inputs, targets = batch.values()
@@ -161,8 +166,10 @@ def validate(
     current_epoch: int,
     sharding: jax.sharding.NamedSharding,
     num_classes: int,
-    metric_names: List[str]  # List of metric class names
-) -> Dict[str, Any]:
+    metric_names: List[str],  # List of metric class names
+    num_samples: int = 3,  # Number of samples to visualize
+    class_names: List[str] = None  # Optional class names
+) -> Tuple[Dict[str, Any], Tuple[np.ndarray, np.ndarray, np.ndarray]]:
     """
     Executes the validation loop and computes performance metrics.
 
@@ -176,20 +183,31 @@ def validate(
         sharding (jax.sharding.NamedSharding): Sharding configuration.
         num_classes (int): Number of classes.
         metric_names (List[str]): List of metric class names to compute.
+        num_samples (int, optional): Number of samples to visualize. Defaults to 3.
+        class_names (List[str], optional): List of class names for labeling. Defaults to None.
 
     Returns:
-        Dict[str, Any]: Dictionary containing all computed metrics.
+        Tuple[Dict[str, Any], Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+            - Dictionary containing all computed metrics.
+            - Tuple containing (images_rgb_nir, masks, predictions) for visualization.
     """
-    # Initialize metrics
     metrics: List[Metric] = get_metrics(metric_names, num_classes)
 
     total_loss = 0.0
     num_batches = 0
 
+    sample_images_rgb_nir = []
+    sample_masks = []
+    sample_predictions = []
+
+    confusion_matrix = jnp.zeros((num_classes, num_classes), dtype=jnp.int32)
+
     progress_bar = create_progress_bar(val_iterator, "Validating")
 
     for batch in val_iterator:
-        if check_epoch_boundary(val_iterator, current_epoch):
+        batch_size = list(batch.values())[0].shape[0]
+
+        if check_epoch_boundary(val_iterator, current_epoch, batch_size):
             break
 
         inputs, targets = batch.values()
@@ -206,19 +224,32 @@ def validate(
 
         y_pred_cls = jnp.argmax(y_pred, axis=1)  # Shape: (N, H, W)
 
-        y_pred = _OneHotEncodeBatched(y_pred_cls, num_classes)  # Shape: (N, C, H, W)
+        y_true_cls = jnp.argmax(targets, axis=1)  # Shape: (N, H, W)
 
-        y_pred = jax.device_put(y_pred, sharding)
+        # put them on TPU for computation
+        y_pred_cls = jax.device_put(y_pred_cls, sharding)
+        y_true_cls = jax.device_put(y_true_cls, sharding)
 
         # Update all metrics
         for metric in metrics:
             metric.update(y_pred, targets)
+
+
 
         total_loss += loss_value
         num_batches += 1
         progress_bar.update(1)
 
     progress_bar.close()
+
+    current_samples = min(num_samples, inputs.shape[0])
+    sample_images_rgb_nir = inputs[:current_samples]
+
+    y_true_cls = jnp.argmax(targets, axis=1)  # (N, H, W)
+
+    sample_masks = y_true_cls[:current_samples]
+    sample_predictions = y_pred_cls[:current_samples]  # (N, H, W)
+
 
     # Compute all metrics
     final_metrics: Dict[str, Any] = {}
@@ -228,9 +259,9 @@ def validate(
 
     # Compute average loss
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-    final_metrics["Loss"] = avg_loss
 
-    return final_metrics
+
+    return final_metrics, avg_loss, (sample_images_rgb_nir, sample_masks, sample_predictions), confusion_matrix
 
 
 def train_model(
@@ -245,12 +276,12 @@ def train_model(
     weights: jnp.ndarray,
     num_epochs: int,
     checkpoint_manager: CheckpointManager,
-    train_writer: tf.summary.SummaryWriter,
-    val_writer: tf.summary.SummaryWriter,
+    writer: SummaryWriter,
     sharding: jax.sharding.NamedSharding,  # Sharding configuration
     num_classes: int,  # Number of classes
     metric_names: List[str],  # List of metric class names
-    class_names: Optional[List[str]] = None,  # Optional: List of class names for labeling
+    class_names: List[str] = None,  # Optional: List of class names for labeling
+    num_visualization_samples: int = 3  # Number of samples to visualize
 ):
     """
     Orchestrates the training and validation process over multiple epochs.
@@ -295,7 +326,7 @@ def train_model(
         )
 
         # Validation Phase
-        final_metrics = validate(
+        final_metrics, val_loss, samples = validate(
             model=model,
             state=state,
             val_iterator=val_iterator,
@@ -304,22 +335,41 @@ def train_model(
             current_epoch=epoch,
             sharding=sharding,
             num_classes=num_classes,
-            metric_names=metric_names
+            metric_names=metric_names,
+            num_samples=num_visualization_samples,
+            class_names=class_names
         )
-
-        val_loss = final_metrics.get("Loss", 0.0)
 
         # Logging using TensorBoard via log_metrics
         log_metrics(
             metrics=final_metrics,
-            writer=val_writer,
+            writer=writer,
             step=epoch,
             class_names=class_names
         )
 
-        # Logging Training Loss separately
-        with train_writer.as_default():
-            tf.summary.scalar('Train Loss', train_loss, step=epoch)
+        # Logging of the training and validation losses
+        writer.add_scalars(
+            "Loss",
+            {
+                "Train": train_loss,
+                "Validation": val_loss
+            },
+            epoch
+        )
+
+        # Logging Sample Visualizations
+        images_rgb_nir, masks, predictions = samples
+        if images_rgb_nir.size != 0:
+            log_sample_visualizations(
+                writer=writer,
+                images_rgb_nir=images_rgb_nir,
+                masks=masks,
+                predictions=predictions,
+                class_names=class_names,
+                step=epoch,
+                num_samples=num_visualization_samples
+            )
 
         # Update progress bar with metrics
         epoch_progress.set_postfix({
@@ -341,7 +391,8 @@ def train_model(
         #     print("Early stopping triggered.")
         #     break
 
-        # TODO: Save visualizations of the model's predictions
+    # Close the writers at the end of training
+    writer.close()
 
     epoch_progress.close()
     print("Training completed.")

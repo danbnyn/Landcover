@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 import optax
-import tensorflow as tf
+from tensorboardX import SummaryWriter
 import yaml
 
 import numpy as np
@@ -49,7 +49,6 @@ def main(config_path: str):
     seed = config['seed']
 
     # Sharding Configuration
-    num_devices = jax.local_device_count()
     devices = np.array(jax.devices())
     mesh = jax.sharding.Mesh(devices, ('batch',))
 
@@ -90,10 +89,13 @@ def main(config_path: str):
     # Shard the model and state
     model, opt_state = eqx.filter_shard((model, opt_state), sharding_model)
 
+    # Get the number of classes
+    num_classes = len(config['data']['original_classes']) - len(config['data']['classes_to_background']) + 1
+
     # Set up data loaders
     train_iterator = create_iterator(
         data_dir=config['data']['data_directory'],
-        split='train[:10%]',
+        split='train[:5%]',
         num_epochs=config['training']['num_epochs'],
         seed=seed,
         batch_size=config['data']['batch_size'],
@@ -108,8 +110,8 @@ def main(config_path: str):
     )
     val_iterator = create_iterator(
         data_dir=config['data']['data_directory'],
-        split='test[:10%]',
-        num_epochs=1,  # Validation typically runs for one epoch
+        split='test[:5%]',
+        num_epochs=config['training']['num_epochs'],  # Validation typically runs for one epoch
         seed=seed,
         batch_size=config['data']['batch_size'],
         worker_count=config['data']['worker_count'],
@@ -129,14 +131,12 @@ def main(config_path: str):
     # Create subdirectories for log, checkpoints, and visualization
     log_dir = os.path.join(run_dir, 'log')
     checkpoints_dir = os.path.join(run_dir, 'checkpoints')
-    visualization_dir = os.path.join(run_dir, 'visualization')
 
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(checkpoints_dir, exist_ok=True)
-    os.makedirs(visualization_dir, exist_ok=True)
 
-    train_writer = tf.summary.create_file_writer(os.path.join(log_dir, 'train'))
-    val_writer = tf.summary.create_file_writer(os.path.join(log_dir, 'val'))
+    # Initialize tensorboardX writers
+    writer = SummaryWriter(logdir=log_dir)
 
     checkpoint_manager = CheckpointManager(
         checkpoint_dir=checkpoints_dir,
@@ -151,12 +151,18 @@ def main(config_path: str):
         "SpecificityMetric"
     ]
 
-    num_classes = len(config['data']['original_classes']) - len(config['data']['classes_to_background']) + 1
 
      # Define class names for better labeling in TensorBoard
     class_names = config.get('data', {}).get('class_names', None)
+    # Exclude the names of classes that are in the intersection of original classes and classes to ignore + background
+    if class_names is not None:
+        class_names = [class_names[i] for i in range(len(class_names)) if i not in config['data']['classes_to_background']]
+        # Add a class name for the background at the beginning
+        class_names = ['Background'] + class_names
 
-    # Train model
+
+
+    # Train Model
     train_model(
         model=model,
         state=state,
@@ -169,12 +175,12 @@ def main(config_path: str):
         weights=weights,
         num_epochs=config['training']['num_epochs'],
         checkpoint_manager=checkpoint_manager,
-        train_writer=train_writer,
-        val_writer=val_writer,
+        writer=train_writer,
         sharding=sharding,
         num_classes=num_classes, 
-        metric_names=metric_names, 
-        class_names=class_names
+        metric_names=metric_names,  
+        class_names=class_names,  
+        num_visualization_samples=3
     )
 
     print("Training completed.")

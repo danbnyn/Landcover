@@ -14,10 +14,10 @@ data:
   worker_count: 0
   worker_buffer_size: 0
   shard_bool: True
-  class_names: ['background', 'class1', 'class2', 'class3', 'class4', 'class5', 'class6', 'class7', 'class8', 'class9']
+  class_names: ['no_data', 'clouds', 'artificial surfaces and construction ', 'cultivated areas', 'broadleaf tree cover', 'coniferous tree cover', 'herbaceous vegetation', 'natural material surfaces', 'permanent snow-covered surfaces', 'water bodies']
 
 training:
-  num_epochs: 2
+  num_epochs: 5
   learning_rate: 0.0001
   weight_decay: 0.0001
 
@@ -29,7 +29,7 @@ loss:
   class_weights: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2, 0.1, 0.1]  # Adjust based on your number of classes
 
 logging:
-  outputs_dir: "outputss"
+  outputs_dir: "outputss/logs"
   max_to_keep: 5
 
 

@@ -5,7 +5,8 @@ import tensorflow as tf
 from typing import List
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
-
+from tensorboardX import SummaryWriter
+import numpy as np
 
 class Metric(ABC):
     """
@@ -39,19 +40,13 @@ class Metric(ABC):
         """
         pass
 
-    def reset(self):
-        """
-        Reset the metric state for a new computation.
-        """
-        self.__init__()
-
 
 def get_metrics(metric_names: List[str], num_classes: int) -> List[Metric]:
     """
     Factory function to create metric instances based on their names.
 
     Args:
-        metric_names (List[str]): List of metric class names as strings.
+        metric_names (List[str]): List of metric class names.
         num_classes (int): Number of classes.
 
     Returns:
@@ -74,59 +69,60 @@ def get_metrics(metric_names: List[str], num_classes: int) -> List[Metric]:
     return metrics
 
 class ConfusionMatrixMetric(Metric):
+    """
+    Base class for metrics that rely on the confusion matrix.
+    Accumulates a confusion matrix and per-class TP, FP, TN, FN.
+    """
     def __init__(self, num_classes: int):
-        """
-        Initializes the confusion matrix components.
-        
-        Args:
-            num_classes (int): Number of classes.
-        """
         self.num_classes = num_classes
-        self.tp = jnp.zeros(num_classes)
-        self.fp = jnp.zeros(num_classes)
-        self.tn = jnp.zeros(num_classes)
-        self.fn = jnp.zeros(num_classes)
+        # Initialize confusion matrix: rows = true classes, columns = predicted classes
+        self.confusion_matrix = jnp.zeros((num_classes, num_classes), dtype=jnp.int32)
+        # Initialize TP, FP, TN, FN per class
+        self.tp = jnp.zeros(num_classes, dtype=jnp.int32)
+        self.fp = jnp.zeros(num_classes, dtype=jnp.int32)
+        self.fn = jnp.zeros(num_classes, dtype=jnp.int32)
+        self.tn = jnp.zeros(num_classes, dtype=jnp.int32)
 
     def reset(self):
-        self.tp = jnp.zeros(self.num_classes, dtype=jnp.float32)
-        self.fp = jnp.zeros(self.num_classes, dtype=jnp.float32)
-        self.tn = jnp.zeros(self.num_classes, dtype=jnp.float32)
-        self.fn = jnp.zeros(self.num_classes, dtype=jnp.float32)
+        self.confusion_matrix = jnp.zeros((self.num_classes, self.num_classes), dtype=jnp.int32)
+        self.tp = jnp.zeros(self.num_classes, dtype=jnp.int32)
+        self.fp = jnp.zeros(self.num_classes, dtype=jnp.int32)
+        self.fn = jnp.zeros(self.num_classes, dtype=jnp.int32)
+        self.tn = jnp.zeros(self.num_classes, dtype=jnp.int32)
 
-    
-    def update(self, y_pred: jnp.ndarray, y_true: jnp.ndarray):
+    def update(self, y_pred_cls: jnp.ndarray, y_true_cls: jnp.ndarray):
         """
-        Updates the confusion matrix components.
-        
+        Update confusion matrix and TP, FP, TN, FN per class in a vectorized manner.
+
         Args:
-            y_pred (jnp.ndarray): One-hot encoded predictions (N, C, H, W).
-            y_true (jnp.ndarray): One-hot encoded ground truth labels (N, C, H, W).
+            y_pred (jnp.ndarray): Predictions, shape (N, H, W).
+            y_true (jnp.ndarray): Ground truth labels, shape (N, H, W).
         """
-        # Flatten the arrays to (N*H*W, C)
-        y_pred_flat = y_pred.reshape(-1, self.num_classes)
-        y_true_flat = y_true.reshape(-1, self.num_classes)
-        
-        # Compute TP, FP, TN, FN per class
-        tp = jnp.sum(y_pred_flat * y_true_flat, axis=0)
-        fp = jnp.sum(y_pred_flat * (1 - y_true_flat), axis=0)
-        fn = jnp.sum((1 - y_pred_flat) * y_true_flat, axis=0)
-        tn = jnp.sum((1 - y_pred_flat) * (1 - y_true_flat), axis=0)
-        
-        # Accumulate
-        self.tp += tp
-        self.fp += fp
-        self.fn += fn
-        self.tn += tn
+
+        # Compute confusion matrix
+        indices = y_true_cls * self.num_classes + y_pred_cls
+        counts = jnp.bincount(indices, minlength=self.num_classes**2)
+        cm = counts.reshape((self.num_classes, self.num_classes))
+        self.confusion_matrix += cm
+
+        # Update TP, FP, FN, TN per class
+        self.tp += jnp.diag(cm)
+        self.fp += jnp.sum(cm, axis=0) - jnp.diag(cm)
+        self.fn += jnp.sum(cm, axis=1) - jnp.diag(cm)
+        self.tn += self.num_classes * self.num_classes - (self.fp + self.fn + self.tp)
+
+    def compute_confusion_matrix(self) -> jnp.ndarray:
+        """
+        Returns the accumulated confusion matrix.
+
+        Returns:
+            jnp.ndarray: Confusion matrix, shape (C, C).
+        """
+        return self.confusion_matrix
     
     def compute(self):
-        """
-        Computes confusion matrix components.
-        
-        Returns:
-            Tuple containing TP, FP, TN, FN arrays.
-        """
-        return self.tp, self.fp, self.tn, self.fn
 
+        pass
 
 class AccuracyMetric(ConfusionMatrixMetric):
     """
@@ -144,6 +140,7 @@ class AccuracyMetric(ConfusionMatrixMetric):
         """
         per_class_accuracy = (self.tp + self.tn) / (self.tp + self.fp + self.tn + self.fn + 1e-7)
         global_accuracy = jnp.sum(self.tp + self.tn) / (jnp.sum(self.tp + self.fp + self.tn + self.fn) + 1e-7)
+
 
         return {
             "per_class_accuracy": per_class_accuracy.tolist(),
@@ -219,31 +216,30 @@ class SpecificityMetric(ConfusionMatrixMetric):
             "mean_specificity": float(mean_specificity)
         }
 
-def log_metrics(metrics: Dict[str, Any], writer: tf.summary.SummaryWriter, step: int, class_names: Optional[List[str]] = None):
+
+def log_metrics(metrics: Dict[str, Any], writer: SummaryWriter, step: int, class_names: Optional[List[str]] = None):
     """
     Logs metrics to TensorBoard dynamically without specifying each metric.
-
+    
     Args:
         metrics (Dict[str, Any]): Dictionary containing all metric values.
-        writer (tf.summary.SummaryWriter): TensorBoard writer.
+        writer (SummaryWriter): TensorBoardX writer.
         step (int): Current training step or epoch.
-        class_names (Optional[List[str]], optional): List of class names for labeling. Defaults to None.
+        class_names (List[str], optional): List of class names for labeling. Defaults to None.
     """
-    with writer.as_default():
-        for metric_name, metric_value in metrics.items():
-            if "per_class" in metric_name:
-                # Extract the type of metric, e.g., 'accuracy' from 'per_class_accuracy'
-                metric_type = metric_name.replace("per_class_", "").capitalize()
-                for idx, val in enumerate(metric_value):
-                    class_label = f"Class_{idx}" if class_names is None else class_names[idx]
-                    writer_name = f"{metric_type}/Class_{idx}" if class_names is None else f"{metric_type}/{class_label}"
-                    tf.summary.scalar(writer_name, float(val), step=step)
-            elif "mean_" in metric_name:
-                # Extract the metric type, e.g., 'iou' from 'mean_iou'
-                metric_type = metric_name.replace("mean_", "").capitalize()
-                writer_name = f"Mean {metric_type}"
-                tf.summary.scalar(writer_name, float(metric_value), step=step)
-            else:
-                # Handle other potential global metrics
-                writer_name = metric_name.replace("_", " ").capitalize()
-                tf.summary.scalar(writer_name, float(metric_value), step=step)
+    for metric_name, metric_value in metrics.items():
+        if "per_class" in metric_name:
+            # Extract the type of metric, e.g., 'accuracy' from 'per_class_accuracy'
+            metric_type = metric_name.replace("per_class_", "").capitalize()
+            scalars_dict = {}
+            for idx, val in enumerate(metric_value):
+                class_label = f"Class_{idx}" if class_names is None else class_names[idx]
+                scalars_dict[class_label] = float(val)
+            writer.add_scalars(f"{metric_type}/Per_Class", scalars_dict, global_step=step)
+        elif "mean_" in metric_name:
+            # Extract the metric type, e.g., 'iou' from 'mean_iou'
+            metric_type = metric_name.replace("mean_", "").capitalize()
+            writer.add_scalar(f"Mean_{metric_type}", float(metric_value), global_step=step)
+        else:
+            # Handle other potential global metrics
+            writer.add_scalar(metric_name.replace("_", " ").capitalize(), float(metric_value), global_step=step)
