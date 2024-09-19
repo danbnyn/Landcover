@@ -34,7 +34,8 @@ def create_iterator(
     shuffle: bool, 
     transforms_bool: bool, 
     shard_bool: bool,
-    sharding: Shard  # Sharding object
+    sharding: Shard, 
+    stats_bool: bool = False
 ) -> grain.PyGrainDatasetIterator:
     """
     Creates a Grain data iterator with the specified configurations.
@@ -53,6 +54,7 @@ def create_iterator(
         transforms_bool (bool): Whether to apply data transformations.
         shard_bool (bool): Whether to apply sharding.
         sharding (Shard): Sharding configuration.
+        stats_bool (bool): Whether the iterator will be used to compute statistics.
 
     Returns:
         grain.PyGrainDatasetIterator: Configured data iterator.
@@ -79,25 +81,33 @@ def create_iterator(
     
     random_transforms_keys = jax.random.split(key, num=2)  # Adjust the number based on your transforms
     
-    # Define transformations
-    transformations = [
+    if stats_bool:
+        transformations = [
         grain.Batch(batch_size, drop_remainder=True),
-        CustomSatelliteImageScaler(0, 99.85),
-        RemapMasksBatched(original_classes, classes_to_background),
     ]
-    
-    if transforms_bool:
+
+    else : 
+        # Define transformations
+        transformations = [
+            grain.Batch(batch_size, drop_remainder=True),
+            CustomSatelliteImageScaler(0, 99.85),
+            RemapMasksBatched(original_classes, classes_to_background),
+        ]
+        
+        if transforms_bool:
+            transformations.extend([
+                RandomFlipBatched(random_transforms_keys[0], 0.5),
+                RandomRotateBatched(random_transforms_keys[1], p=0.5, rot_angle=10),
+                # Add more transforms if needed
+            ])
+        
         transformations.extend([
-            RandomFlipBatched(random_transforms_keys[0], 0.5),
-            RandomRotateBatched(random_transforms_keys[1], p=0.5, rot_angle=10),
-            # Add more transforms if needed
-        ])
-    
-    transformations.extend([
-                OneHotEncodeBatched(
-            len(RemapMasksBatched(original_classes, classes_to_background).remaining_classes) + 1
-        )]
-    )
+                    OneHotEncodeBatched(
+                len(RemapMasksBatched(original_classes, classes_to_background).remaining_classes) + 1
+            )]
+        )
+
+
     # Add the Encoding at the end to avoid un necessary additional computation
     
     # Create the dataloader

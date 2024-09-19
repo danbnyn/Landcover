@@ -26,7 +26,9 @@ optimizer:
 
 loss:
   name: "weighted_bce_loss"
-  class_weights: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2, 0.1, 0.1]  # Adjust based on your number of classes
+  class_weights: [0.00000000e+00, 1.70447610e-05, 5.03171731e-02, 3.34047791e-01, 2.28628355e-01, 7.96288181e-02, 2.75100100e-01, 8.06214221e-03, 8.84316184e-07, 2.41976915e-02]
+  class_weights_mode: "sqrt_inverse_frequency"
+  recalculate_class_weights: False
 
 logging:
   outputs_dir: "outputss/logs"

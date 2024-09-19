@@ -3,6 +3,10 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from typing import Callable
+from tqdm.auto import tqdm
+import numpy as np
+from typing import Dict, Optional
+import grain.python as grain
 
 # Generalized loss function creator
 def create_loss_fn(loss_type="weighted_bce_loss", **kwargs):
@@ -54,3 +58,99 @@ def batch_loss_fn(
     loss = loss_fn(y_pred, y_true, weights)
 
     return loss, new_state
+
+
+def compute_class_weights(
+    dataset_iterator: grain.PyGrainDatasetIterator,
+    num_classes: int,
+    num_batches: Optional[int] = None,
+    verbose: bool = True,
+    mode: str = "inverse_frequency"
+) -> Dict[int, float]:
+    """
+    Computes class weights based on class frequencies in the dataset.
+
+    Args:
+        dataset_iterator (grain.PyGrainDatasetIterator): Iterator over the dataset.
+        num_classes (int): Total number of classes.
+        num_batches (Optional[int], optional): Number of batches to process. Defaults to None (process entire dataset).
+        mask_key (str, optional): Key to access mask in batch dictionary. Defaults to "mask".
+        verbose (bool, optional): If True, displays a progress bar. Defaults to True.
+        mode (str, optional): Strategy to compute class weights. Defaults to "inverse_frequency".
+
+    Returns:
+        Dict[int, float]: Dictionary mapping class indices to their corresponding weights.
+    """
+    class_counts = np.zeros(num_classes, dtype=np.int64)
+
+
+    for batch in tqdm(dataset_iterator, total=num_batches):
+        mask_key = list(batch.keys())[1]
+        masks = batch[mask_key]  # Shape: (N, H, W)
+
+        # Flatten masks to 1D array
+        masks_flat = masks.reshape(-1)
+
+        # Count occurrences of each class in the batch
+        counts = np.bincount(masks_flat, minlength=num_classes)
+
+        # Accumulate counts
+        class_counts += counts
+
+    if verbose:
+        print(f"Class Counts: {class_counts}")
+
+    # Compute class frequencies
+    total_pixels = np.sum(class_counts)
+
+    class_frequencies = class_counts / total_pixels
+
+    if verbose:
+        print(f"Class Frequencies: {class_frequencies}")
+
+
+    class_weights = {}
+    for cls in range(num_classes):
+        if class_frequencies[cls] > 0:
+            if mode == "sqrt_inverse_frequency":
+                class_weights[cls] = 1.0 / np.sqrt(class_frequencies[cls])
+            elif mode == "log_inverse_frequency":
+                class_weights[cls] = 1.0 / np.log(class_frequencies[cls])
+            elif mode == "median_frequency":
+                class_weights[cls] = np.median(class_frequencies) / class_frequencies[cls]
+            else :  # Default to inverse frequency
+                class_weights[cls] = 1.0 / class_frequencies
+        else:
+            # Handle classes with zero frequency
+            class_weights[cls] = 0.0
+            if verbose:
+                print(f"Warning: Class {cls} has zero frequency.")
+
+    return class_weights
+
+def process_weights(weights: Dict[int, float], original_classes: list, classes_to_background: list):
+    """
+    Process class weights to remove weights for classes that are mapped to background. Also, set the background class weight to zero and normalize the weights.
+
+    Args:
+        weights (Dict[int, float]): Dictionary mapping class indices to their corresponding weights.
+        original_classes (list): List of original class labels.
+        classes_to_background (list): Classes to map to background.
+
+    Returns:
+       List[int, float]: Processed class weights.
+    """
+    remaining_classes = [0] + [cls for cls in original_classes if cls not in classes_to_background] 
+    processed_weights = {cls: weights[cls] for cls in remaining_classes}
+
+    # Set background class weight to zero
+    processed_weights[0] = 0.0
+
+    # Normalize weights
+    total_weight = sum(processed_weights.values())
+    processed_weights = {cls: weight / total_weight for cls, weight in processed_weights.items()}
+
+    # turn it into jnp array
+    processed_weights = jnp.array([processed_weights[cls] for cls in processed_weights.keys()])
+
+    return processed_weights

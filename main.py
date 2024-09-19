@@ -16,6 +16,8 @@ from src.trainers.base_trainer import train_model
 from src.utils.losses import batch_loss_fn, create_loss_fn, weighted_bce_loss
 from src.data.data_loader import create_iterator, Shard
 from src.utils.checkpoint import CheckpointManager
+from src.utils.losses import compute_class_weights, process_weights
+from src.utils.visualization import get_num_batches
 
 # jax.config.update("jax_platform_name", "cpu")  # Uncomment if you want to force CPU
 
@@ -63,6 +65,53 @@ def main(config_path: str):
         drop_remainder=True
     )
 
+    # Get the number of classes
+    num_classes = len(config['data']['original_classes']) - len(config['data']['classes_to_background']) + 1
+
+        # Recalculate class weights if flag is set to True
+    if config['loss'].get('recalculate_class_weights', False):
+        print("Recalculating class weights...")
+
+        # Create iterator for class weight computation (assuming this is your training iterator)
+        train_iterator_for_weights = create_iterator(
+            data_dir=config['data']['data_directory'],
+            split='train', 
+            num_epochs=1,
+            seed=seed,
+            batch_size=config['data']['batch_size'],
+            worker_count=config['data']['worker_count'],
+            worker_buffer_size=config['data']['worker_buffer_size'],
+            original_classes=config['data']['original_classes'],
+            classes_to_background=config['data']['classes_to_background'],
+            shuffle=True,
+            transforms_bool=False,
+            shard_bool=config['data']['shard_bool'],
+            sharding=shard_options,
+            stats_bool=True
+        )
+
+        num_batches = get_num_batches(train_iterator_for_weights)
+
+        # Compute Class Weights
+        class_weights_dict = compute_class_weights(
+            dataset_iterator=train_iterator_for_weights,
+            num_classes=len(config['data']['original_classes']),
+            num_batches=num_batches,
+            verbose=True,
+            mode = config['loss'].get('class_weights_mode')
+        )
+
+        # Update config with the newly computed class weights
+        config['loss']['class_weights'] = [
+            class_weights_dict[cls] for cls in range(len(config['data']['original_classes']))
+        ]
+
+        # Save updated config to the file
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f)
+        print(f"Class weights recalculated and saved to {config_path}")
+
+
     out_channels = len(config['data']['original_classes']) - len(config['data']['classes_to_background']) + 1
 
     # Initialize model with state
@@ -80,6 +129,7 @@ def main(config_path: str):
 
     # Set up loss function
     weights = jnp.array(config['loss']['class_weights'])
+    weights = process_weights(weights, original_classes=config['data']['original_classes'], classes_to_background=config['data']['classes_to_background'])
     loss_fn = create_loss_fn(loss_type='weighted_bce_loss', weights=weights)
 
     # Initialize optimizer state and shard it
@@ -88,9 +138,6 @@ def main(config_path: str):
 
     # Shard the model and state
     model, opt_state = eqx.filter_shard((model, opt_state), sharding_model)
-
-    # Get the number of classes
-    num_classes = len(config['data']['original_classes']) - len(config['data']['classes_to_background']) + 1
 
     # Set up data loaders
     train_iterator = create_iterator(
@@ -106,7 +153,8 @@ def main(config_path: str):
         shuffle=True,
         transforms_bool=True,
         shard_bool=config['data']['shard_bool'],
-        sharding=shard_options  # Pass sharding to the data pipeline
+        sharding=shard_options,
+        stats_bool=False
     )
     val_iterator = create_iterator(
         data_dir=config['data']['data_directory'],
@@ -121,7 +169,8 @@ def main(config_path: str):
         shuffle=False,
         transforms_bool=False,
         shard_bool=config['data']['shard_bool'],
-        sharding=shard_options
+        sharding=shard_options,
+        stats_bool=False
     )
 
     # Set up logging and checkpointing
