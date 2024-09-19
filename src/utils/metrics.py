@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 from tensorboardX import SummaryWriter
 import numpy as np
+from src.utils.visualization import plot_confusion_matrix
 
 class Metric(ABC):
     """
@@ -53,6 +54,7 @@ def get_metrics(metric_names: List[str], num_classes: int) -> List[Metric]:
         List[Metric]: List of metric instances.
     """
     metric_map = {
+        "ConfusionMatrixMetric": ConfusionMatrixMetric,
         "AccuracyMetric": AccuracyMetric,
         "IoUMetric": IoUMetric,
         "SensitivityMetric": SensitivityMetric,
@@ -60,13 +62,15 @@ def get_metrics(metric_names: List[str], num_classes: int) -> List[Metric]:
     }
 
     metrics = []
+
     for name in metric_names:
         metric_class = metric_map.get(name)
         if metric_class is None:
             raise ValueError(f"Metric '{name}' is not recognized.")
         metrics.append(metric_class(num_classes=num_classes))
-    
+
     return metrics
+
 
 class ConfusionMatrixMetric(Metric):
     """
@@ -98,70 +102,79 @@ class ConfusionMatrixMetric(Metric):
             y_pred (jnp.ndarray): Predictions, shape (N, H, W).
             y_true (jnp.ndarray): Ground truth labels, shape (N, H, W).
         """
+        # Flatten y_pred and y_true to shape (N*H*W,)
+        y_pred_flat = y_pred_cls.flatten()
+        y_true_flat = y_true_cls.flatten()
 
         # Compute confusion matrix
-        indices = y_true_cls * self.num_classes + y_pred_cls
+        indices = y_true_flat * self.num_classes + y_pred_flat
         counts = jnp.bincount(indices, minlength=self.num_classes**2)
         cm = counts.reshape((self.num_classes, self.num_classes))
         self.confusion_matrix += cm
 
         # Update TP, FP, FN, TN per class
-        self.tp += jnp.diag(cm)
-        self.fp += jnp.sum(cm, axis=0) - jnp.diag(cm)
-        self.fn += jnp.sum(cm, axis=1) - jnp.diag(cm)
-        self.tn += self.num_classes * self.num_classes - (self.fp + self.fn + self.tp)
-
-    def compute_confusion_matrix(self) -> jnp.ndarray:
-        """
-        Returns the accumulated confusion matrix.
-
-        Returns:
-            jnp.ndarray: Confusion matrix, shape (C, C).
-        """
-        return self.confusion_matrix
+        self.tp = jnp.diag(cm)
+        self.fp = jnp.sum(cm, axis=0) - jnp.diag(cm)
+        self.fn = jnp.sum(cm, axis=1) - jnp.diag(cm)
+        self.tn = jnp.sum(cm) - (self.tp + self.fp + self.fn)
     
     def compute(self):
+        return {"confusion_matrix": self.confusion_matrix}
 
-        pass
-
-class AccuracyMetric(ConfusionMatrixMetric):
+class AccuracyMetric(Metric):
     """
     Computes both per-class accuracy and global accuracy.
     """
     def __init__(self, num_classes: int):
-        super().__init__(num_classes)
+        self.num_classes = num_classes
 
-    def compute(self) -> Dict[str, Any]:
+    def update(self, y_pred: jnp.ndarray, y_true: jnp.ndarray):
+        pass
+
+    def compute(self, conf_matrix) -> Dict[str, Any]:
         """
-        Compute per-class and global accuracy.
+        Compute per-class and mean accuracy.
 
         Returns:
-            Dict[str, Any]: Dictionary containing per-class and global accuracy.
+            Dict[str, Any]: Dictionary containing per-class and mean accuracy.
         """
+        self.tp = conf_matrix.tp
+        self.fp = conf_matrix.fp
+        self.fn = conf_matrix.fn
+        self.tn = conf_matrix.tn
+
         per_class_accuracy = (self.tp + self.tn) / (self.tp + self.fp + self.tn + self.fn + 1e-7)
-        global_accuracy = jnp.sum(self.tp + self.tn) / (jnp.sum(self.tp + self.fp + self.tn + self.fn) + 1e-7)
+        mean_accuracy = jnp.mean(per_class_accuracy)
 
 
         return {
             "per_class_accuracy": per_class_accuracy.tolist(),
-            "global_accuracy": float(global_accuracy)
+            "mean_accuracy": float(mean_accuracy)
         }
 
 
-class IoUMetric(ConfusionMatrixMetric):
+class IoUMetric(Metric):
     """
     Computes both per-class IoU and mean IoU.
     """
     def __init__(self, num_classes: int):
-        super().__init__(num_classes)
+        self.num_classes = num_classes
 
-    def compute(self) -> Dict[str, Any]:
+    def update(self, y_pred_cls: Array, y_true_cls: Array):
+        pass
+
+    def compute(self, conf_matrix) -> Dict[str, Any]:
         """
         Compute per-class IoU and mean IoU.
 
         Returns:
             Dict[str, Any]: Dictionary containing per-class IoU and mean IoU.
         """
+        self.tp = conf_matrix.tp
+        self.fp = conf_matrix.fp
+        self.fn = conf_matrix.fn
+        self.tn = conf_matrix.tn
+    
         intersection = self.tp
         union = self.tp + self.fp + self.fn
         per_class_iou = intersection / (union + 1e-7)
@@ -172,20 +185,28 @@ class IoUMetric(ConfusionMatrixMetric):
             "mean_iou": float(mean_iou)
         }
 
-class SensitivityMetric(ConfusionMatrixMetric):
+class SensitivityMetric(Metric):
     """
     Computes both per-class sensitivity (recall) and mean sensitivity.
     """
     def __init__(self, num_classes: int):
-        super().__init__(num_classes)
+        self.num_classes = num_classes
 
-    def compute(self) -> Dict[str, Any]:
+    def update(self, y_pred_cls: Array, y_true_cls: Array):
+        pass
+
+    def compute(self, conf_matrix) -> Dict[str, Any]:
         """
         Compute per-class sensitivity and mean sensitivity.
 
         Returns:
             Dict[str, Any]: Dictionary containing per-class sensitivity and mean sensitivity.
         """
+        self.tp = conf_matrix.tp
+        self.fp = conf_matrix.fp
+        self.fn = conf_matrix.fn
+        self.tn = conf_matrix.tn
+
         sensitivity = self.tp / (self.tp + self.fn + 1e-7)
         mean_sensitivity = jnp.mean(sensitivity)
 
@@ -194,20 +215,28 @@ class SensitivityMetric(ConfusionMatrixMetric):
             "mean_sensitivity": float(mean_sensitivity)
         }
 
-class SpecificityMetric(ConfusionMatrixMetric):
+class SpecificityMetric(Metric):
     """
     Computes both per-class specificity and mean specificity.
     """
     def __init__(self, num_classes: int):
-        super().__init__(num_classes)
+        self.num_classes = num_classes
 
-    def compute(self) -> Dict[str, Any]:
+    def update(self, y_pred_cls: Array, y_true_cls: Array):
+        pass
+
+    def compute(self, conf_matrix) -> Dict[str, Any]:
         """
         Compute per-class specificity and mean specificity.
 
         Returns:
             Dict[str, Any]: Dictionary containing per-class specificity and mean specificity.
         """
+        self.tp = conf_matrix.tp
+        self.fp = conf_matrix.fp
+        self.fn = conf_matrix.fn
+        self.tn = conf_matrix.tn
+
         specificity = self.tn / (self.tn + self.fp + 1e-7)
         mean_specificity = jnp.mean(specificity)
 
@@ -228,7 +257,18 @@ def log_metrics(metrics: Dict[str, Any], writer: SummaryWriter, step: int, class
         class_names (List[str], optional): List of class names for labeling. Defaults to None.
     """
     for metric_name, metric_value in metrics.items():
-        if "per_class" in metric_name:
+        if metric_name == "confusion_matrix":
+            # Log confusion matrix as an image
+            log_confusion_matrix(
+                writer=writer,
+                cm=np.array(metric_value),
+                class_names=class_names,
+                step=step,
+                normalize=False,  # Set to True if you prefer a normalized confusion matrix
+                title="Confusion Matrix",
+                cmap="Blues"
+            )
+        elif "per_class" in metric_name:
             # Extract the type of metric, e.g., 'accuracy' from 'per_class_accuracy'
             metric_type = metric_name.replace("per_class_", "").capitalize()
             scalars_dict = {}
@@ -241,5 +281,42 @@ def log_metrics(metrics: Dict[str, Any], writer: SummaryWriter, step: int, class
             metric_type = metric_name.replace("mean_", "").capitalize()
             writer.add_scalar(f"Mean_{metric_type}", float(metric_value), global_step=step)
         else:
+            print(f"Logging global metric: {metric_name} = {metric_value}")
             # Handle other potential global metrics
             writer.add_scalar(metric_name.replace("_", " ").capitalize(), float(metric_value), global_step=step)
+
+
+def log_confusion_matrix(
+    writer: SummaryWriter,
+    cm: np.ndarray,
+    class_names: Optional[List[str]] = None,
+    step: int = 0,
+    normalize: bool = False,
+    title: str = "Confusion Matrix",
+    cmap: str = "Blues"
+):
+    """
+    Logs the confusion matrix as an image to TensorBoard.
+
+    Args:
+        writer (SummaryWriter): tensorboardX writer.
+        cm (np.ndarray): Confusion matrix, shape (C, C).
+        class_names (List[str], optional): List of class names for labeling. Defaults to None.
+        step (int, optional): Current epoch or step number. Defaults to 0.
+        normalize (bool, optional): Whether to normalize the confusion matrix. Defaults to False.
+        title (str, optional): Title of the confusion matrix plot. Defaults to "Confusion Matrix".
+        cmap (str, optional): Colormap for the heatmap. Defaults to "Blues".
+    """
+    cm_image = plot_confusion_matrix(
+        cm=cm,
+        class_names=class_names,
+        normalize=normalize,
+        title=title,
+        cmap=cmap
+    )
+    writer.add_image(
+        "Confusion_Matrix",
+        cm_image,
+        global_step=step,
+        dataformats='HWC'
+    )

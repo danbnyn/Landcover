@@ -23,7 +23,7 @@ import numpy as np
 from src.data.transforms import _OneHotEncodeBatched
 from src.utils.metrics import Metric, get_metrics
 from typing import List, Any, Union, Optional
-from src.utils.metrics import log_metrics
+from src.utils.metrics import log_metrics, ConfusionMatrixMetric
 from src.utils.visualization import log_sample_visualizations
 
 def check_epoch_boundary(iterator, current_epoch, batch_size):
@@ -191,7 +191,14 @@ def validate(
             - Dictionary containing all computed metrics.
             - Tuple containing (images_rgb_nir, masks, predictions) for visualization.
     """
-    metrics: List[Metric] = get_metrics(metric_names, num_classes)
+    metrics = get_metrics(metric_names, num_classes)
+
+    # Identify the ConfusionMatrixMetric instance
+    confusion_matrix_metric = None
+    for metric in metrics:
+        if isinstance(metric, ConfusionMatrixMetric):
+            confusion_matrix_metric = metric
+            break
 
     total_loss = 0.0
     num_batches = 0
@@ -199,8 +206,6 @@ def validate(
     sample_images_rgb_nir = []
     sample_masks = []
     sample_predictions = []
-
-    confusion_matrix = jnp.zeros((num_classes, num_classes), dtype=jnp.int32)
 
     progress_bar = create_progress_bar(val_iterator, "Validating")
 
@@ -230,11 +235,8 @@ def validate(
         y_pred_cls = jax.device_put(y_pred_cls, sharding)
         y_true_cls = jax.device_put(y_true_cls, sharding)
 
-        # Update all metrics
-        for metric in metrics:
-            metric.update(y_pred, targets)
-
-
+        # Update confusion matrix
+        confusion_matrix_metric.update(y_pred_cls, y_true_cls)
 
         total_loss += loss_value
         num_batches += 1
@@ -254,14 +256,18 @@ def validate(
     # Compute all metrics
     final_metrics: Dict[str, Any] = {}
     for metric in metrics:
-        metric_results = metric.compute()
+        if isinstance(metric, ConfusionMatrixMetric):
+            metric_results = metric.compute()
+        else:
+            metric_results = metric.compute(confusion_matrix_metric)
         final_metrics.update(metric_results)
+
 
     # Compute average loss
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
 
-    return final_metrics, avg_loss, (sample_images_rgb_nir, sample_masks, sample_predictions), confusion_matrix
+    return final_metrics, avg_loss, (sample_images_rgb_nir, sample_masks, sample_predictions)
 
 
 def train_model(

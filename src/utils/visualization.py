@@ -268,38 +268,3 @@ def plot_confusion_matrix(
     plt.close(fig)
 
     return img
-
-def log_confusion_matrix(
-    writer: SummaryWriter,
-    cm: np.ndarray,
-    class_names: Optional[List[str]] = None,
-    step: int = 0,
-    normalize: bool = False,
-    title: str = "Confusion Matrix",
-    cmap: str = "Blues"
-):
-    """
-    Logs the confusion matrix as an image to TensorBoard.
-
-    Args:
-        writer (SummaryWriter): tensorboardX writer.
-        cm (np.ndarray): Confusion matrix, shape (C, C).
-        class_names (List[str], optional): List of class names for labeling. Defaults to None.
-        step (int, optional): Current epoch or step number. Defaults to 0.
-        normalize (bool, optional): Whether to normalize the confusion matrix. Defaults to False.
-        title (str, optional): Title of the confusion matrix plot. Defaults to "Confusion Matrix".
-        cmap (str, optional): Colormap for the heatmap. Defaults to "Blues".
-    """
-    cm_image = plot_confusion_matrix(
-        cm=cm,
-        class_names=class_names,
-        normalize=normalize,
-        title=title,
-        cmap=cmap
-    )
-    writer.add_image(
-        "Confusion_Matrix",
-        cm_image,
-        global_step=step,
-        dataformats='HWC'
-    )

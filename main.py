@@ -95,7 +95,7 @@ def main(config_path: str):
     # Set up data loaders
     train_iterator = create_iterator(
         data_dir=config['data']['data_directory'],
-        split='train[:5%]',
+        split='train',
         num_epochs=config['training']['num_epochs'],
         seed=seed,
         batch_size=config['data']['batch_size'],
@@ -110,7 +110,7 @@ def main(config_path: str):
     )
     val_iterator = create_iterator(
         data_dir=config['data']['data_directory'],
-        split='test[:5%]',
+        split='test',
         num_epochs=config['training']['num_epochs'],  # Validation typically runs for one epoch
         seed=seed,
         batch_size=config['data']['batch_size'],
@@ -145,6 +145,7 @@ def main(config_path: str):
 
     # Define metrics to compute
     metric_names = [
+        "ConfusionMatrixMetric",
         "AccuracyMetric",
         "IoUMetric",
         "SensitivityMetric",
@@ -152,7 +153,7 @@ def main(config_path: str):
     ]
 
 
-     # Define class names for better labeling in TensorBoard
+    # Define class names for better labeling in TensorBoard
     class_names = config.get('data', {}).get('class_names', None)
     # Exclude the names of classes that are in the intersection of original classes and classes to ignore + background
     if class_names is not None:
@@ -175,7 +176,7 @@ def main(config_path: str):
         weights=weights,
         num_epochs=config['training']['num_epochs'],
         checkpoint_manager=checkpoint_manager,
-        writer=train_writer,
+        writer=writer,
         sharding=sharding,
         num_classes=num_classes, 
         metric_names=metric_names,  
