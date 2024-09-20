@@ -7,6 +7,7 @@ from tqdm.auto import tqdm
 import numpy as np
 from typing import Dict, Optional
 import grain.python as grain
+from typing import List
 
 # Generalized loss function creator
 def create_loss_fn(loss_type="weighted_bce_loss", **kwargs):
@@ -60,15 +61,14 @@ def batch_loss_fn(
     return loss, new_state
 
 
-def compute_class_weights(
+def compute_class_frequencies(
     dataset_iterator: grain.PyGrainDatasetIterator,
     num_classes: int,
     num_batches: Optional[int] = None,
     verbose: bool = True,
-    mode: str = "inverse_frequency"
 ) -> Dict[int, float]:
     """
-    Computes class weights based on class frequencies in the dataset.
+    Computes class frequencies the dataset.
 
     Args:
         dataset_iterator (grain.PyGrainDatasetIterator): Iterator over the dataset.
@@ -108,40 +108,42 @@ def compute_class_weights(
     if verbose:
         print(f"Class Frequencies: {class_frequencies}")
 
+    return class_frequencies
 
+def process_weights(class_frequencies: Dict[int, float], original_classes: list, classes_to_background: list, mode: str = "inverse_frequency", verbose: bool = True) -> List[float]:
+    """
+    Process class weights to remove weights for classes that are mapped to background. Also, set the background class weight to zero and normalize the weights.
+
+    Args:
+        class_frequencies (Dict[int, float]): Dictionary mapping class indices to their corresponding frequencies.
+        original_classes (list): List of original class indices.
+        classes_to_background (list): List of class indices that are mapped to background.
+        mode (str, optional): Strategy to compute class weights. Defaults to "inverse_frequency".
+        verbose (bool, optional): If True, displays a warning message for classes with zero frequency. Defaults to True.
+
+    Returns:
+       List[int, float]: Processed class weights.
+    """
     class_weights = {}
-    for cls in range(num_classes):
+    for cls, frequencies in enumerate(class_frequencies):
         if class_frequencies[cls] > 0:
             if mode == "sqrt_inverse_frequency":
-                class_weights[cls] = 1.0 / np.sqrt(class_frequencies[cls])
+                class_weights[cls] = 1.0 / np.sqrt(frequencies)
             elif mode == "log_inverse_frequency":
-                class_weights[cls] = 1.0 / np.log(class_frequencies[cls])
+                class_weights[cls] = 1.0 / np.log(frequencies)
             elif mode == "median_frequency":
-                class_weights[cls] = np.median(class_frequencies) / class_frequencies[cls]
+                class_weights[cls] = np.median(class_frequencies) / frequencies
             else :  # Default to inverse frequency
-                class_weights[cls] = 1.0 / class_frequencies
+                class_weights[cls] = 1.0 / frequencies
         else:
             # Handle classes with zero frequency
             class_weights[cls] = 0.0
             if verbose:
                 print(f"Warning: Class {cls} has zero frequency.")
 
-    return class_weights
 
-def process_weights(weights: Dict[int, float], original_classes: list, classes_to_background: list):
-    """
-    Process class weights to remove weights for classes that are mapped to background. Also, set the background class weight to zero and normalize the weights.
-
-    Args:
-        weights (Dict[int, float]): Dictionary mapping class indices to their corresponding weights.
-        original_classes (list): List of original class labels.
-        classes_to_background (list): Classes to map to background.
-
-    Returns:
-       List[int, float]: Processed class weights.
-    """
     remaining_classes = [0] + [cls for cls in original_classes if cls not in classes_to_background] 
-    processed_weights = {cls: weights[cls] for cls in remaining_classes}
+    processed_weights = {cls: class_weights[cls] for cls in remaining_classes}
 
     # Set background class weight to zero
     processed_weights[0] = 0.0

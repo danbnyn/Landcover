@@ -168,7 +168,6 @@ def validate(
     num_classes: int,
     metric_names: List[str],  # List of metric class names
     num_samples: int = 3,  # Number of samples to visualize
-    class_names: List[str] = None  # Optional class names
 ) -> Tuple[Dict[str, Any], Tuple[np.ndarray, np.ndarray, np.ndarray]]:
     """
     Executes the validation loop and computes performance metrics.
@@ -343,7 +342,6 @@ def train_model(
             num_classes=num_classes,
             metric_names=metric_names,
             num_samples=num_visualization_samples,
-            class_names=class_names
         )
 
         # Logging using TensorBoard via log_metrics

@@ -16,7 +16,7 @@ from src.trainers.base_trainer import train_model
 from src.utils.losses import batch_loss_fn, create_loss_fn, weighted_bce_loss
 from src.data.data_loader import create_iterator, Shard
 from src.utils.checkpoint import CheckpointManager
-from src.utils.losses import compute_class_weights, process_weights
+from src.utils.losses import compute_class_frequencies, process_weights
 from src.utils.visualization import get_num_batches
 
 # jax.config.update("jax_platform_name", "cpu")  # Uncomment if you want to force CPU
@@ -68,12 +68,12 @@ def main(config_path: str):
     # Get the number of classes
     num_classes = len(config['data']['original_classes']) - len(config['data']['classes_to_background']) + 1
 
-        # Recalculate class weights if flag is set to True
-    if config['loss'].get('recalculate_class_weights', False):
-        print("Recalculating class weights...")
+        # Recalculate class frequencies if flag is set to True
+    if config['loss'].get('recalculate_class_frequencies', False):
+        print("Recalculating class frequencies...")
 
         # Create iterator for class weight computation (assuming this is your training iterator)
-        train_iterator_for_weights = create_iterator(
+        train_iterator_for_frequencies = create_iterator(
             data_dir=config['data']['data_directory'],
             split='train', 
             num_epochs=1,
@@ -90,26 +90,25 @@ def main(config_path: str):
             stats_bool=True
         )
 
-        num_batches = get_num_batches(train_iterator_for_weights)
+        num_batches = get_num_batches(train_iterator_for_frequencies)
 
-        # Compute Class Weights
-        class_weights_dict = compute_class_weights(
-            dataset_iterator=train_iterator_for_weights,
+        # Compute Class frequencies
+        class_frequencies_dict = compute_class_frequencies(
+            dataset_iterator=train_iterator_for_frequencies,
             num_classes=len(config['data']['original_classes']),
             num_batches=num_batches,
             verbose=True,
-            mode = config['loss'].get('class_weights_mode')
         )
 
         # Update config with the newly computed class weights
-        config['loss']['class_weights'] = [
-            class_weights_dict[cls] for cls in range(len(config['data']['original_classes']))
+        config['loss']['class_frequencies'] = [
+            class_frequencies_dict[cls] for cls in range(len(config['data']['original_classes']))
         ]
 
         # Save updated config to the file
         with open(config_path, 'w') as f:
             yaml.dump(config, f)
-        print(f"Class weights recalculated and saved to {config_path}")
+        print(f"Class frequencies recalculated and saved to {config_path}")
 
 
     out_channels = len(config['data']['original_classes']) - len(config['data']['classes_to_background']) + 1
@@ -128,8 +127,7 @@ def main(config_path: str):
     optimizer = optax.adamw(learning_rate=learning_rate, weight_decay=weight_decay)
 
     # Set up loss function
-    weights = jnp.array(config['loss']['class_weights'])
-    weights = process_weights(weights, original_classes=config['data']['original_classes'], classes_to_background=config['data']['classes_to_background'])
+    weights = process_weights(config['loss']['class_frequencies'], original_classes=config['data']['original_classes'], classes_to_background=config['data']['classes_to_background'])
     loss_fn = create_loss_fn(loss_type='weighted_bce_loss', weights=weights)
 
     # Initialize optimizer state and shard it
