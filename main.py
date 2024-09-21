@@ -127,7 +127,8 @@ def main(config_path: str):
     optimizer = optax.adamw(learning_rate=learning_rate, weight_decay=weight_decay)
 
     # Set up loss function
-    weights = process_weights(config['loss']['class_frequencies'], original_classes=config['data']['original_classes'], classes_to_background=config['data']['classes_to_background'])
+    weights = process_weights(config['loss']['class_frequencies'], original_classes=config['data']['original_classes'], classes_to_background=config['data']['classes_to_background'], mode=config['loss']['class_weights_mode'], weights_normalization_method=config['loss']['weights_normalization_method'])
+    print(f"Weights: {weights}")
     loss_fn = create_loss_fn(loss_type='weighted_bce_loss', weights=weights)
 
     # Initialize optimizer state and shard it
@@ -157,7 +158,7 @@ def main(config_path: str):
     val_iterator = create_iterator(
         data_dir=config['data']['data_directory'],
         split='test',
-        num_epochs=config['training']['num_epochs'],  # Validation typically runs for one epoch
+        num_epochs=config['training']['num_epochs'],
         seed=seed,
         batch_size=config['data']['batch_size'],
         worker_count=config['data']['worker_count'],
@@ -208,7 +209,7 @@ def main(config_path: str):
         # Add a class name for the background at the beginning
         class_names = ['Background'] + class_names
 
-
+    
 
     # Train Model
     train_model(

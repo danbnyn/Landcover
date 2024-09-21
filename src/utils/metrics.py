@@ -107,16 +107,16 @@ class ConfusionMatrixMetric(Metric):
         y_true_flat = y_true_cls.flatten()
 
         # Compute confusion matrix
-        indices = y_true_flat * self.num_classes + y_pred_flat
+        indices = jnp.add(y_true_flat * self.num_classes,y_pred_flat)
         counts = jnp.bincount(indices, minlength=self.num_classes**2)
         cm = counts.reshape((self.num_classes, self.num_classes))
-        self.confusion_matrix += cm
+        self.confusion_matrix = jnp.add(cm,self.confusion_matrix)
 
         # Update TP, FP, FN, TN per class
-        self.tp = jnp.diag(cm)
-        self.fp = jnp.sum(cm, axis=0) - jnp.diag(cm)
-        self.fn = jnp.sum(cm, axis=1) - jnp.diag(cm)
-        self.tn = jnp.sum(cm) - (self.tp + self.fp + self.fn)
+        self.tp = jnp.diag(self.confusion_matrix)
+        self.fp = jnp.subtract(jnp.sum(self.confusion_matrix, axis=0),jnp.diag(self.confusion_matrix))
+        self.fn = jnp.subtract(jnp.sum(self.confusion_matrix, axis=1),jnp.diag(self.confusion_matrix))
+        self.tn = jnp.sum(self.confusion_matrix) - (self.tp + self.fp + self.fn)
     
     def compute(self):
         return {"confusion_matrix": self.confusion_matrix}
@@ -264,7 +264,7 @@ def log_metrics(metrics: Dict[str, Any], writer: SummaryWriter, step: int, class
                 cm=np.array(metric_value),
                 class_names=class_names,
                 step=step,
-                normalize=False,  # Set to True if you prefer a normalized confusion matrix
+                normalize=True,  # Set to True if you prefer a normalized confusion matrix
                 title="Confusion Matrix",
                 cmap="Blues"
             )
@@ -291,7 +291,7 @@ def log_confusion_matrix(
     cm: np.ndarray,
     class_names: Optional[List[str]] = None,
     step: int = 0,
-    normalize: bool = False,
+    normalize: bool = True,
     title: str = "Confusion Matrix",
     cmap: str = "Blues"
 ):

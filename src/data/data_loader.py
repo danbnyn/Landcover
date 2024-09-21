@@ -103,8 +103,9 @@ def create_iterator(
         
         transformations.extend([
                     OneHotEncodeBatched(
-                len(RemapMasksBatched(original_classes, classes_to_background).remaining_classes) + 1
-            )]
+                        num_classes=len(original_classes) - len(classes_to_background) + 1
+                    )
+            ]
         )
 
 

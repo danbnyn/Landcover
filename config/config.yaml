@@ -17,7 +17,7 @@ data:
   class_names: ['no_data', 'clouds', 'artificial surfaces and construction ', 'cultivated areas', 'broadleaf tree cover', 'coniferous tree cover', 'herbaceous vegetation', 'natural material surfaces', 'permanent snow-covered surfaces', 'water bodies']
 
 training:
-  num_epochs: 5
+  num_epochs: 10
   learning_rate: 0.0001
   weight_decay: 0.0001
 
@@ -27,8 +27,9 @@ optimizer:
 loss:
   name: "weighted_bce_loss"
   class_frequencies: [0.00000000e+00, 1.70447610e-05, 5.03171731e-02, 3.34047791e-01, 2.28628355e-01, 7.96288181e-02, 2.75100100e-01, 8.06214221e-03, 8.84316184e-07, 2.41976915e-02]
-  class_weights_mode: "sqrt_inverse_frequency"
+  class_weights_mode: "log_inverse_frequency"
   recalculate_class_frequencies: False
+  weights_normalization_method: "mean_weight_to_one"
 
 logging:
   outputs_dir: "outputss/logs"

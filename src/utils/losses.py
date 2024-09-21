@@ -110,49 +110,107 @@ def compute_class_frequencies(
 
     return class_frequencies
 
-def process_weights(class_frequencies: Dict[int, float], original_classes: list, classes_to_background: list, mode: str = "inverse_frequency", verbose: bool = True) -> List[float]:
+
+from typing import List
+import numpy as np
+import jax.numpy as jnp
+
+def process_weights(
+    class_frequencies: List[float],
+    original_classes: List[int],
+    classes_to_background: List[int],
+    mode: str = "inverse_frequency",
+    weights_normalization_method: str = "none",
+    verbose: bool = True
+) -> jnp.ndarray:
     """
-    Process class weights to remove weights for classes that are mapped to background. Also, set the background class weight to zero and normalize the weights.
+    Process class weights by first combining the frequencies of classes mapped to background into the background class,
+    then remapping the remaining classes to have contiguous indices starting from 0.
+    Also computes class weights based on the selected mode, sets background class weight to zero, and normalizes the weights.
 
     Args:
-        class_frequencies (Dict[int, float]): Dictionary mapping class indices to their corresponding frequencies.
-        original_classes (list): List of original class indices.
-        classes_to_background (list): List of class indices that are mapped to background.
+        class_frequencies (List[float]): List of class frequencies.
+        original_classes (List[int]): List of original class indices.
+        classes_to_background (List[int]): List of class indices that are mapped to background.
         mode (str, optional): Strategy to compute class weights. Defaults to "inverse_frequency".
+        weights_normalization_method (str, optional): Method to normalize weights. Defaults to "none".
         verbose (bool, optional): If True, displays a warning message for classes with zero frequency. Defaults to True.
 
     Returns:
-       List[int, float]: Processed class weights.
+        jnp.ndarray: Processed and normalized class weights with remapped class indices.
     """
+    # Step 1: Combine the frequencies of classes mapped to background
+    background_frequency = sum(class_frequencies[cls] for cls in classes_to_background)
+    
+    # Initialize new_frequencies with the combined background frequency
+    # Assuming the background class is originally class 0
+    new_frequencies = [class_frequencies[0] + background_frequency]
+    remapped_classes = [0]  # Remapped index 0 corresponds to the new background class
+    
+    # Step 2: Remap remaining classes to contiguous indices, excluding those mapped to background
+    for cls in original_classes:
+        if cls not in classes_to_background:
+            new_frequencies.append(class_frequencies[cls])
+            remapped_classes.append(cls)
+    
+    if verbose:
+        print(f"New Frequencies: {new_frequencies}")
+    
+    # Compute class weights based on the updated frequency list
     class_weights = {}
-    for cls, frequencies in enumerate(class_frequencies):
-        if class_frequencies[cls] > 0:
+    for cls, frequency in enumerate(new_frequencies):
+        if frequency > 0:
             if mode == "sqrt_inverse_frequency":
-                class_weights[cls] = 1.0 / np.sqrt(frequencies)
+                class_weights[cls] = 1.0 / np.sqrt(frequency)
             elif mode == "log_inverse_frequency":
-                class_weights[cls] = 1.0 / np.log(frequencies)
+                class_weights[cls] = np.log(1.0 + 1.0 / frequency)
             elif mode == "median_frequency":
-                class_weights[cls] = np.median(class_frequencies) / frequencies
-            else :  # Default to inverse frequency
-                class_weights[cls] = 1.0 / frequencies
+                class_weights[cls] = np.median(new_frequencies) / frequency
+            elif mode == "inverse_frequency":
+                class_weights[cls] = 1.0 / frequency
+            else:  # Default to equal weights
+                class_weights[cls] = 1.0
         else:
-            # Handle classes with zero frequency
             class_weights[cls] = 0.0
             if verbose:
                 print(f"Warning: Class {cls} has zero frequency.")
-
-
-    remaining_classes = [0] + [cls for cls in original_classes if cls not in classes_to_background] 
-    processed_weights = {cls: class_weights[cls] for cls in remaining_classes}
-
-    # Set background class weight to zero
-    processed_weights[0] = 0.0
+    
 
     # Normalize weights
-    total_weight = sum(processed_weights.values())
-    processed_weights = {cls: weight / total_weight for cls, weight in processed_weights.items()}
-
-    # turn it into jnp array
-    processed_weights = jnp.array([processed_weights[cls] for cls in processed_weights.keys()])
-
-    return processed_weights
+    if weights_normalization_method == "minimum_weight_to_one":
+        min_weight = min(class_weights.values())
+        if min_weight > 0:
+            for cls in class_weights:
+                class_weights[cls] /= min_weight
+        else:
+            if verbose:
+                print("Warning: Minimum weight is zero during minimum normalization.")
+    
+    elif weights_normalization_method == "sum_to_one":
+        total_weight = sum(class_weights.values())
+        if total_weight > 0:
+            for cls in class_weights:
+                class_weights[cls] /= total_weight
+        else:
+            if verbose:
+                print("Warning: Total weight is zero during sum normalization.")
+    
+    elif weights_normalization_method == "mean_weight_to_one":
+        mean_weight = np.mean(list(class_weights.values()))
+        if mean_weight > 0:
+            for cls in class_weights:
+                class_weights[cls] /= mean_weight
+        else:
+            if verbose:
+                print("Warning: Mean weight is zero during mean normalization.")
+    
+    elif weights_normalization_method == "none":
+        pass  # No normalization
+    
+    else:
+        raise ValueError(f"Unknown normalization method: {weights_normalization_method}")
+    
+    # Convert to jnp array
+    processed_weights_array = jnp.array([class_weights[cls] for cls in range(len(class_weights))])
+    
+    return processed_weights_array

@@ -152,7 +152,7 @@ def validate_step(
     """
     batch_model = jax.vmap(
         model, axis_name='batch', in_axes=(0, None), out_axes=(0, None)
-    )
+    ) # As per https://docs.kidger.site/equinox/examples/stateful/
     y_pred, _ = batch_model(inputs, state)
     loss = loss_fn(y_pred, targets, weights)
     return y_pred ,loss
@@ -208,6 +208,9 @@ def validate(
 
     progress_bar = create_progress_bar(val_iterator, "Validating")
 
+#####
+    class_counts = np.zeros(num_classes, dtype=np.int64)
+####
     for batch in val_iterator:
         batch_size = list(batch.values())[0].shape[0]
 
@@ -234,6 +237,12 @@ def validate(
         y_pred_cls = jax.device_put(y_pred_cls, sharding)
         y_true_cls = jax.device_put(y_true_cls, sharding)
 
+#########
+        mask_flat = y_true_cls.reshape(-1)
+        counts = np.bincount(mask_flat, minlength=num_classes)
+        class_counts += counts
+#########
+
         # Update confusion matrix
         confusion_matrix_metric.update(y_pred_cls, y_true_cls)
 
@@ -243,10 +252,13 @@ def validate(
 
     progress_bar.close()
 
+#############
+    class_frequencies = class_counts / np.sum(class_counts)
+    print(f"Class frequencies: {class_frequencies}")
+#############
+
     current_samples = min(num_samples, inputs.shape[0])
     sample_images_rgb_nir = inputs[:current_samples]
-
-    y_true_cls = jnp.argmax(targets, axis=1)  # (N, H, W)
 
     sample_masks = y_true_cls[:current_samples]
     sample_predictions = y_pred_cls[:current_samples]  # (N, H, W)
