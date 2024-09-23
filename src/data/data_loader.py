@@ -122,6 +122,6 @@ def create_iterator(
     )
     
     iterator = iter(data_loader)
-    
+
     return iterator
 

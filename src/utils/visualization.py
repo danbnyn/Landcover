@@ -186,23 +186,33 @@ def log_sample_visualizations(
     N = images_rgb_nir.shape[0]
     num_samples = min(num_samples, N)
     
-    for i in range(num_samples):
-        image_rgb_nir = images_rgb_nir[i]  # Shape: (4, H, W)
-        mask = masks[i]  # Shape: (H, W)
-        pred = predictions[i]  # Shape: (H, W)
-        
-        # Generate RGB+NIR visualization
-        rgb_nir_img = visualize_rgb_nir(image_rgb_nir)
-        
-        # Generate Mask and Prediction visualizations
-        mask_img = visualize_mask(mask, class_names)
-        pred_img = visualize_mask(pred, class_names)
+    if step == 0:
+        for i in range(num_samples):
+            image_rgb_nir = images_rgb_nir[i]  # Shape: (4, H, W)
+            mask = masks[i]  # Shape: (H, W)
+            pred = predictions[i]  # Shape: (H, W)
+            
+            # Generate RGB+NIR visualization
+            rgb_nir_img = visualize_rgb_nir(image_rgb_nir)
+            
+            # Generate Mask and Prediction visualizations
+            mask_img = visualize_mask(mask, class_names)
+            pred_img = visualize_mask(pred, class_names)
 
-        # Log images to TensorBoard
-        writer.add_image(f"Sample_{i}/RGB_NIR", rgb_nir_img, global_step=step, dataformats='HWC')
-        writer.add_image(f"Sample_{i}/Ground_Truth_Mask", mask_img, global_step=step, dataformats='HWC')
-        writer.add_image(f"Sample_{i}/Prediction_Mask", pred_img, global_step=step, dataformats='HWC')
+            # Log images to TensorBoard
+            writer.add_image(f"Sample_{i}/RGB_NIR", rgb_nir_img, global_step=step, dataformats='HWC')
+            writer.add_image(f"Sample_{i}/Ground_Truth_Mask", mask_img, global_step=step, dataformats='HWC')
+            writer.add_image(f"Sample_{i}/Prediction_Mask", pred_img, global_step=step, dataformats='HWC')
 
+    else : 
+        for i in range(num_samples):
+            pred = predictions[i]  # Shape: (H, W)
+
+            # Generate Prediction visualizations
+            pred_img = visualize_mask(pred, class_names)
+
+            # Log images to TensorBoard
+            writer.add_image(f"Sample_{i}/Prediction_Mask", pred_img, global_step=step, dataformats='HWC')
 
 def plot_confusion_matrix(
     cm: np.ndarray,

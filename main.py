@@ -21,9 +21,6 @@ from src.utils.visualization import get_num_batches
 
 # jax.config.update("jax_platform_name", "cpu")  # Uncomment if you want to force CPU
 
-def load_config(config_path):
-    with open(config_path, 'r') as f:
-        return yaml.safe_load(f)
 
 def load_config(config_path: str) -> dict:
     """
@@ -128,8 +125,7 @@ def main(config_path: str):
 
     # Set up loss function
     weights = process_weights(config['loss']['class_frequencies'], original_classes=config['data']['original_classes'], classes_to_background=config['data']['classes_to_background'], mode=config['loss']['class_weights_mode'], weights_normalization_method=config['loss']['weights_normalization_method'])
-    print(f"Weights: {weights}")
-    loss_fn = create_loss_fn(loss_type='weighted_bce_loss', weights=weights)
+    loss_fn = create_loss_fn(loss_type=config['loss']['name'], weights=weights)
 
     # Initialize optimizer state and shard it
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
@@ -185,6 +181,11 @@ def main(config_path: str):
 
     # Initialize tensorboardX writers
     writer = SummaryWriter(logdir=log_dir)
+
+    # Add in the config to the tensorboard writer
+    writer.add_text("config", yaml.dump(config))
+    writer.add_text("weights", str(weights))
+
 
     checkpoint_manager = CheckpointManager(
         checkpoint_dir=checkpoints_dir,

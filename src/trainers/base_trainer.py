@@ -38,16 +38,18 @@ def check_epoch_boundary(iterator, current_epoch, batch_size):
 
     # check if adding a batch to the current step will cross the epoch boundary
     if any([state['last_seen_indices'][str(i)] + batch_size >= (current_epoch + 1) * num_records for i in range(len(state['last_seen_indices']))]):
+
+        # 2. Epoch boundary crossed, update state for the next epoch
+        worker_count = len(state['last_seen_indices'])
+        for i in range(worker_count):
+            state['last_seen_indices'][str(i)] = ((current_epoch + 1) * num_records) - worker_count + i
+        state['last_worker_index'] =  - 1  # Reset worker index
+        
+        # Update the DataLoader's state
+        iterator.set_state(json.dumps(state, indent=4).encode())
+
         return True
-    #
-    # # 2. Epoch boundary crossed, update state for the next epoch
-    # worker_count = len(state['last_seen_indices'])
-    # for i in range(worker_count):
-    #     state['last_seen_indices'][str(i)] = ((current_epoch + 1) * num_records) - worker_count + i
-    # state['last_worker_index'] = worker_count - 1  # Reset worker index
-    #
-    # # Update the DataLoader's state
-    # iterator.set_state(json.dumps(state, indent=4).encode())
+    
 
     return False #  Epoch finished
 
@@ -316,6 +318,7 @@ def train_model(
 
     for epoch in epoch_progress:
         # Training Phase
+
         model, state, opt_state, train_loss = train_epoch(
             model, 
             state, 
@@ -342,6 +345,33 @@ def train_model(
             metric_names=metric_names,
             num_samples=num_visualization_samples,
         )
+
+        # model, state, opt_state, train_loss = train_epoch(
+        #     model, 
+        #     state, 
+        #     opt_state, 
+        #     train_iterator, 
+        #     optimizer, 
+        #     batch_loss_fn, 
+        #     loss_fn,
+        #     weights, 
+        #     epoch, 
+        #     sharding
+        # )
+
+        # # Validation Phase
+        # final_metrics, val_loss, samples = validate(
+        #     model=model,
+        #     state=state,
+        #     val_iterator=val_iterator,
+        #     loss_fn=loss_fn,
+        #     weights=weights,
+        #     current_epoch=epoch,
+        #     sharding=sharding,
+        #     num_classes=num_classes,
+        #     metric_names=metric_names,
+        #     num_samples=num_visualization_samples,
+        # )
 
         # Logging using TensorBoard via log_metrics
         log_metrics(

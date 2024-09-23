@@ -7,17 +7,83 @@ from tqdm.auto import tqdm
 import numpy as np
 from typing import Dict, Optional
 import grain.python as grain
-from typing import List
+from typing import List, Union
 
 # Generalized loss function creator
-def create_loss_fn(loss_type="weighted_bce_loss", **kwargs):
+def create_loss_fn(loss_type: str = "weighted_bce_loss", **kwargs) -> Callable:
+    """
+    Factory function to create a loss function based on the specified loss_type.
+
+    Args:
+        loss_type: str, type of loss function to create ("weighted_bce_loss" or "focal_loss").
+        **kwargs: Additional keyword arguments to pass to the loss function.
+
+    Returns:
+        A callable loss function.
+    """
     if loss_type == "weighted_bce_loss":
         def loss_fn(predictions, targets, weights):
             return weighted_bce_loss(predictions, targets, weights)
+    elif loss_type == "focal_loss":
+        def loss_fn(predictions, targets, weights):
+            return focal_loss(predictions, targets, weights, **kwargs)
     else:
         raise ValueError(f"Unknown loss function type: {loss_type}")
 
     return loss_fn
+
+# Focal Loss
+def focal_loss(
+    predictions: jnp.ndarray,
+    targets: jnp.ndarray,
+    weights: Optional[jnp.ndarray] = None,
+    gamma: float = 2.0,
+    alpha: Union[float, jnp.ndarray] = 0.25
+) -> jnp.ndarray:
+    """
+    Compute the Focal Loss for binary classification.
+
+    Args:
+        predictions: jnp.ndarray of shape (batch, num_classes, h, w), predicted probabilities.
+        targets: jnp.ndarray of shape (batch, num_classes, h, w), ground truth labels (0 or 1).
+        weights: Optional[jnp.ndarray] of shape (num_classes,), weights to apply to each class.
+        gamma: float, focusing parameter to reduce the loss contribution from easy examples.
+        alpha: float or jnp.ndarray, weighting factor to balance positive vs negative examples.
+               If float, same alpha is applied to all classes. If ndarray, should have shape (num_classes,).
+
+    Returns:
+        loss: scalar, the weighted focal loss.
+    """
+    # Ensure predictions are within (epsilon, 1 - epsilon) to prevent log(0)
+    epsilon = 1e-8
+    predictions = jnp.clip(predictions, epsilon, 1.0 - epsilon)
+
+    # Compute p_t
+    p_t = jnp.where(targets == 1, predictions, 1 - predictions)
+
+    # Compute alpha_t
+    if isinstance(alpha, float):
+        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+    else:
+        # alpha is expected to be a jnp.ndarray with shape (num_classes,)
+        # Expand dimensions to match predictions
+        alpha = alpha.reshape((1, -1, 1, 1))  # (1, num_classes, 1, 1)
+        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+
+    # Compute focal weight
+    focal_weight = (1 - p_t) ** gamma
+
+    # Compute the focal loss
+    loss = -alpha_t * focal_weight * jnp.log(p_t)
+
+    # Apply class weights if provided
+    if weights is not None:
+        # Reshape weights to (1, num_classes, 1, 1) to broadcast
+        weights = weights.reshape((1, -1, 1, 1))
+        loss = loss * weights
+
+    # Compute the mean loss
+    return jnp.mean(loss)
 
 def weighted_bce_loss(predictions, targets, weights=None):
     """
@@ -163,7 +229,7 @@ def process_weights(
             if mode == "sqrt_inverse_frequency":
                 class_weights[cls] = 1.0 / np.sqrt(frequency)
             elif mode == "log_inverse_frequency":
-                class_weights[cls] = np.log(1.0 + 1.0 / frequency ** 2)
+                class_weights[cls] = np.log(1.0 + 1.0 / (frequency))
             elif mode == "median_frequency":
                 class_weights[cls] = np.median(new_frequencies) / frequency
             elif mode == "inverse_frequency":
