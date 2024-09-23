@@ -163,7 +163,7 @@ def process_weights(
             if mode == "sqrt_inverse_frequency":
                 class_weights[cls] = 1.0 / np.sqrt(frequency)
             elif mode == "log_inverse_frequency":
-                class_weights[cls] = np.log(1.0 + 1.0 / frequency)
+                class_weights[cls] = np.log(1.0 + 1.0 / frequency ** 2)
             elif mode == "median_frequency":
                 class_weights[cls] = np.median(new_frequencies) / frequency
             elif mode == "inverse_frequency":

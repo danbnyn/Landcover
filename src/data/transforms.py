@@ -8,7 +8,7 @@ import numpy as np
 from jaxtyping import Array, Float, Int, PyTree, Key
 from jax.image import resize
 import grain.python as grain
-from typing import Tuple
+from typing import Tuple, List, Dict
 
 
 ####################################################################################################
@@ -289,55 +289,62 @@ def _OneHotEncodeBatched(
     return jnp.transpose(one_hot_encoded, (0, 3, 1, 2))
 
 def create_mapping_array(
-        classes_to_ignore: Int[Array, "M"],
-        classes: Int[Array, "N"]
-) -> Int[Array, "N-M+1"]:
+    classes_to_ignore: Tuple[int, ...],
+    classes: Tuple[int, ...]
+) -> jnp.ndarray:
     """
-    Creates a mapping array that remaps class indices, setting ignored classes to 0.
+    Creates a mapping array that remaps class indices, setting ignored classes to 0 and
+    other classes to contiguous labels starting from 1.
 
     Args:
-        classes_to_ignore (Array): Array of class indices to be ignored.
-        classes (Array): Array of all class indices.
+        classes_to_ignore (Tuple[int, ...]): Tuple of class indices to be ignored.
+        classes (Tuple[int, ...]): Tuple of all class indices.
 
     Returns:
-        Array: Mapping array where ignored classes are set to 0, others remain as their indices.
+        jnp.ndarray: Mapping array where ignored classes are set to 0, and others are assigned contiguous labels.
     """
-    classes_to_ignore_array = jnp.array(classes_to_ignore)
-    classes_array = jnp.array(classes)
+    # Sort the classes to ensure consistent ordering
+    sorted_classes = tuple(sorted(classes))
 
-    # Create a boolean mask to identify which classes should be ignored
-    ignore_mask = jnp.isin(classes_array, classes_to_ignore_array)
+    # Determine which classes to ignore using a list comprehension and convert to JAX array
+    is_ignored = jnp.array([cls in classes_to_ignore for cls in sorted_classes])
 
-    # Create an array of indices for all classes
-    indices = jnp.arange(0, len(classes))
+    # Create a mask for classes to keep (not ignored)
+    keep_mask = ~is_ignored
 
-    # Set the indices of ignored classes to 0
-    mapping = jnp.where(ignore_mask, 0, indices)
+    # Assign contiguous labels to the classes to keep
+    new_labels = jnp.cumsum(keep_mask).astype(jnp.int32)
 
-    return mapping.astype(jnp.uint8)
+    # Set labels for ignored classes to 0
+    new_labels = jnp.where(keep_mask, new_labels, 0)
 
-@partial(jax.jit)
-def _RemapMasksBatched(
-        batch: Int[Array, "N H W"],
-        classes_to_background: Int[Array, "M"],
-        original_classes: Int[Array, "K"]
-) -> Int[Array, "N H W"]:
+    # Determine the maximum class index to set the size of the mapping array
+    max_class = max(classes)
+
+    # Initialize the mapping array with zeros (for ignored classes)
+    mapping = jnp.zeros(max_class + 1, dtype=jnp.int32)
+
+    # Convert sorted_classes to a JAX array for indexing
+    sorted_classes_jax = jnp.array(sorted_classes)
+
+    # Assign the new labels to the corresponding class indices
+    mapping = mapping.at[sorted_classes_jax].set(new_labels)
+
+    return mapping
+
+@jax.jit
+def  _RemapMasksBatched(mapping_array: jnp.ndarray, batch: jnp.ndarray) -> jnp.ndarray:
     """
-    Remaps class labels in a batch of masks according to a mapping array, setting background classes to 0.
+    Remaps class labels in a batch of masks according to a mapping array.
 
     Args:
-        batch (Array): Batch of mask images with class indices.
-        classes_to_background (Array): Array of class indices to be remapped to background.
-        original_classes (Array): Array of all original class indices.
+        mapping_array (jnp.ndarray): Precomputed mapping array.
+        batch (jnp.ndarray): Batch of mask images with class indices.
 
     Returns:
-        Array: Batch of masks with remapped class indices.
+        jnp.ndarray: Batch of masks with remapped class indices.
     """
-    # Create a mapping array to remap the class labels
-    mapping_array = create_mapping_array(classes_to_background, original_classes)
-
-    # Apply the mapping to the batch of masks
-    return mapping_array[batch]  # JAX automatically broadcasts the mapping array to the shape of the batch
+    return mapping_array[batch]
 
 @partial(jax.jit)
 def _RandomFlipBatched(
@@ -615,16 +622,54 @@ class RandomColorJitterBatched(grain.RandomMapTransform):
     pass
 
 class RemapMasksBatched(grain.MapTransform):
+    """
+    A transformation class that applies the remapping to a batch of mask samples.
+    """
 
-    def __init__(self, original_classes, classes_to_background):
+    def __init__(
+        self,
+        original_classes: Tuple[int, ...],
+        classes_to_background: Tuple[int, ...]
+    ):
+        """
+        Initializes the RemapMasksBatched transform.
+
+        Args:
+            original_classes (Tuple[int, ...]): Tuple of all original class indices.
+            classes_to_background (Tuple[int, ...]): Tuple of class indices to be remapped to background (0).
+        """
+        # Store the class tuples directly (ensure they are tuples)
         self.original_classes = original_classes
         self.classes_to_background = classes_to_background
-        self.remaining_classes = sorted(set(original_classes) - set(classes_to_background))
 
-    def map(self, sample_batch):
+        # Precompute the mapping array
+        self.mapping_array = create_mapping_array(
+            self.classes_to_background,
+            self.original_classes
+        )
+
+    def map(self, sample_batch: Dict[str, jnp.ndarray]) -> Dict[str, jnp.ndarray]:
+        """
+        Applies the remapping to the mask in the sample batch.
+
+        Args:
+            sample_batch (dict): A batch of samples containing masks.
+
+        Returns:
+            dict: The updated batch with remapped masks.
+        """
+        # Identify the mask key (assuming the mask is the last key in the batch)
+
         mask_key = list(sample_batch.keys())[-1]
-        sample_batch[mask_key] = _RemapMasksBatched(sample_batch[mask_key], self.classes_to_background, self.original_classes)
+
+        # Apply the remapping to the mask using the JIT-compiled function
+        sample_batch[mask_key] = _RemapMasksBatched(
+            self.mapping_array,
+            sample_batch[mask_key]
+        )
+
         return sample_batch
+
 
 class RandomRotateBatched(grain.MapTransform):
     def __init__(self, key, p, rot_angle):

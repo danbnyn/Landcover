@@ -10,8 +10,6 @@ from src.data.transforms import (
     RobustScaleBatched, CustomSatelliteImageScaler, ClaheHistTransformBatched
 )
 
-import jax.numpy as jnp
-
 class Shard(ShardOptions):
     def __init__(self, shard_index: int, shard_count: int, drop_remainder: bool = False):
         super().__init__(
@@ -83,7 +81,7 @@ def create_iterator(
     
     if stats_bool:
         transformations = [
-        grain.Batch(batch_size, drop_remainder=True),
+        grain.Batch(batch_size, drop_remainder=True),   
     ]
 
     else : 

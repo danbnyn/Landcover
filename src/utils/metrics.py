@@ -279,7 +279,7 @@ def log_metrics(metrics: Dict[str, Any], writer: SummaryWriter, step: int, class
         elif "mean_" in metric_name:
             # Extract the metric type, e.g., 'iou' from 'mean_iou'
             metric_type = metric_name.replace("mean_", "").capitalize()
-            writer.add_scalar(f"Mean_{metric_type}", float(metric_value), global_step=step)
+            writer.add_scalar(f"{metric_type}/Mean", float(metric_value), global_step=step)
         else:
             print(f"Logging global metric: {metric_name} = {metric_value}")
             # Handle other potential global metrics
