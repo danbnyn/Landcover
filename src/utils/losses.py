@@ -26,7 +26,7 @@ def create_loss_fn(loss_type: str = "weighted_bce_loss", **kwargs) -> Callable:
             return weighted_bce_loss(predictions, targets, weights)
     elif loss_type == "focal_loss":
         def loss_fn(predictions, targets, weights):
-            return focal_loss(predictions, targets, weights, **kwargs)
+            return focal_loss(predictions, targets, weights)
     else:
         raise ValueError(f"Unknown loss function type: {loss_type}")
 
