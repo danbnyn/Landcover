@@ -80,6 +80,6 @@ class ResUnet(eqx.Module):
 
         # Final convolution layer
         x = self.conv(x)
-        x = jax.nn.sigmoid(x)
+        x = jax.nn.softmax(x)
 
         return x, state

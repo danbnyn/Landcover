@@ -346,33 +346,6 @@ def train_model(
             num_samples=num_visualization_samples,
         )
 
-        # model, state, opt_state, train_loss = train_epoch(
-        #     model, 
-        #     state, 
-        #     opt_state, 
-        #     train_iterator, 
-        #     optimizer, 
-        #     batch_loss_fn, 
-        #     loss_fn,
-        #     weights, 
-        #     epoch, 
-        #     sharding
-        # )
-
-        # # Validation Phase
-        # final_metrics, val_loss, samples = validate(
-        #     model=model,
-        #     state=state,
-        #     val_iterator=val_iterator,
-        #     loss_fn=loss_fn,
-        #     weights=weights,
-        #     current_epoch=epoch,
-        #     sharding=sharding,
-        #     num_classes=num_classes,
-        #     metric_names=metric_names,
-        #     num_samples=num_visualization_samples,
-        # )
-
         # Logging using TensorBoard via log_metrics
         log_metrics(
             metrics=final_metrics,

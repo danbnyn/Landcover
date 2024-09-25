@@ -4,6 +4,7 @@ model:
   in_channels: 4
   out_channels: 9
   n_filters: 64
+  depth : 5
 
 
 data:
@@ -25,11 +26,11 @@ optimizer:
   name: "adamw"
 
 loss:
-  name: "focal_loss"
+  name: "weighted_bce_loss"
   class_frequencies: [0.00000000e+00, 1.70447610e-05, 5.03171731e-02, 3.34047791e-01, 2.28628355e-01, 7.96288181e-02, 2.75100100e-01, 8.06214221e-03, 8.84316184e-07, 2.41976915e-02]
-  class_weights_mode: "log_inverse_frequency"
+  class_weights_mode: log_inverse_frequency
   recalculate_class_frequencies: False
-  weights_normalization_method: "sum_to_one"
+  weights_normalization_method: "minimum_weight_to_one"
 
 logging:
   outputs_dir: "outputss/logs"
