@@ -48,13 +48,13 @@ install google fuse
 
 sudo mkdir "$HOME/dataset"
 sudo chmod 777 "$HOME/dataset"
-gcsfuse --implicit-dirs --implicit-dirs --file-mode 777 --dir-mode 777 --uid=0 --gid=0 s2glc_array_records "$HOME/dataset"
+gcsfuse --implicit-dirs --dir-mode 777 --uid=0 --gid=0 s2glc_array_records "../dataset"
 
 
 5. Mount the outputs dir 
 sudo mkdir "$HOME/Landcover/outputs"
 sudo chmod 777 "$HOME/Landcover/outputs"
-gcsfuse --implicit-dirs --implicit-dirs --file-mode 777 --dir-mode 777 --uid=0 --gid=0 s2glc_logs "$HOME/Landcover/logs"
+gcsfuse --implicit-dirs --dir-mode 777 --uid=0 --gid=0 s2glc_logs "./outputs/logs"
 
 6. Load tensorboard
 

@@ -9,31 +9,48 @@ from typing import Dict, Optional
 import grain.python as grain
 from typing import List, Union
 
-# Generalized loss function creator
-def create_loss_fn(loss_type: str = "weighted_bce_loss", **kwargs) -> Callable:
+import optax
+import jax
+import jax.numpy as jnp
+from typing import Callable, Optional, Union
+
+# Factory function to create appropriate loss function
+def create_loss_fn(loss_type: str = "cross_entropy", **kwargs) -> Callable:
     """
     Factory function to create a loss function based on the specified loss_type.
 
     Args:
-        loss_type: str, type of loss function to create ("weighted_bce_loss" or "focal_loss").
+        loss_type: str, type of loss function to create ("cross_entropy", "weighted_cross_entropy", "focal_loss").
         **kwargs: Additional keyword arguments to pass to the loss function.
 
     Returns:
         A callable loss function.
     """
-    if loss_type == "weighted_bce_loss":
+    if loss_type == "cross_entropy":
         def loss_fn(predictions, targets, weights):
-            return weighted_bce_loss(predictions, targets, weights)
+            predictions = jnp.moveaxis(predictions, 1, -1)
+            ce = optax.softmax_cross_entropy(
+                logits=predictions, labels=targets
+            )
+            return jnp.mean(ce)
+    elif loss_type == "weighted_cross_entropy":
+        def loss_fn(predictions, targets, weights):
+
+            # Apply smooth_labels
+            targets = label_smoothing(targets, epsilon=0.1)
+
+            return weighted_softmax_cross_entropy(predictions, targets, weights)
+        
     elif loss_type == "focal_loss":
         def loss_fn(predictions, targets, weights):
-            return focal_loss(predictions, targets, weights)
+            return multi_class_focal_loss(predictions, targets, weights, **kwargs)
     else:
         raise ValueError(f"Unknown loss function type: {loss_type}")
 
     return loss_fn
 
-# Focal Loss
-def focal_loss(
+# Multi-Class Focal Loss Implementation
+def multi_class_focal_loss(
     predictions: jnp.ndarray,
     targets: jnp.ndarray,
     weights: Optional[jnp.ndarray] = None,
@@ -41,11 +58,11 @@ def focal_loss(
     alpha: Union[float, jnp.ndarray] = 0.25
 ) -> jnp.ndarray:
     """
-    Compute the Focal Loss for binary classification.
+    Compute the Focal Loss for multi-class classification.
 
     Args:
         predictions: jnp.ndarray of shape (batch, num_classes, h, w), predicted probabilities.
-        targets: jnp.ndarray of shape (batch, num_classes, h, w), ground truth labels (0 or 1).
+        targets: jnp.ndarray of shape (batch, h, w), ground truth labels as class indices.
         weights: Optional[jnp.ndarray] of shape (num_classes,), weights to apply to each class.
         gamma: float, focusing parameter to reduce the loss contribution from easy examples.
         alpha: float or jnp.ndarray, weighting factor to balance positive vs negative examples.
@@ -54,77 +71,121 @@ def focal_loss(
     Returns:
         loss: scalar, the weighted focal loss.
     """
-    # Ensure predictions are within (epsilon, 1 - epsilon) to prevent log(0)
     epsilon = 1e-8
     predictions = jnp.clip(predictions, epsilon, 1.0 - epsilon)
-
+    # Convert targets to one-hot encoding
+    num_classes = predictions.shape[1]
+    targets_one_hot = jax.nn.one_hot(targets, num_classes=num_classes)  # Shape: (N, C, H, W)
+    # Compute cross-entropy
+    cross_entropy = -targets_one_hot * jnp.log(predictions)
     # Compute p_t
-    p_t = jnp.where(targets == 1, predictions, 1 - predictions)
-
+    p_t = jnp.sum(predictions * targets_one_hot, axis=1)  # Shape: (N, H, W)
     # Compute alpha_t
     if isinstance(alpha, float):
-        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
+        alpha_t = alpha * targets_one_hot + (1 - alpha) * (1 - targets_one_hot)
     else:
         # alpha is expected to be a jnp.ndarray with shape (num_classes,)
-        # Expand dimensions to match predictions
         alpha = alpha.reshape((1, -1, 1, 1))  # (1, num_classes, 1, 1)
-        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
-
+        alpha_t = alpha * targets_one_hot + (1 - alpha) * (1 - targets_one_hot)
     # Compute focal weight
     focal_weight = (1 - p_t) ** gamma
-
-    # Compute the focal loss
-    loss = -alpha_t * focal_weight * jnp.log(p_t)
-
+    # Expand focal_weight to match cross_entropy shape
+    focal_weight = focal_weight.reshape((focal_weight.shape[0], 1, focal_weight.shape[1], focal_weight.shape[2]))
+    # Compute focal loss
+    loss = focal_weight * cross_entropy
     # Apply class weights if provided
     if weights is not None:
-        # Reshape weights to (1, num_classes, 1, 1) to broadcast
-        weights = weights.reshape((1, -1, 1, 1))
+        weights = weights.reshape((1, -1, 1, 1))  # (1, num_classes, 1, 1)
         loss = loss * weights
-
-    # Compute the mean loss
+    # Sum over classes and average
+    loss = jnp.sum(loss, axis=1)  # Shape: (N, H, W)
     return jnp.mean(loss)
 
-def weighted_bce_loss(predictions, targets, weights=None):
+def weighted_softmax_cross_entropy(
+    logits: jnp.ndarray,
+    labels: jnp.ndarray,
+    weights: Optional[jnp.ndarray] = None
+) -> jnp.ndarray:
     """
-    Compute weighted binary cross-entropy loss.
+    Computes the weighted softmax cross-entropy loss for multi-class segmentation.
 
     Args:
-        predictions: jnp.ndarray of shape (batch, num_classes, h, w), predicted probabilities.
-        targets: jnp.ndarray of shape (batch, num_classes, h, w), ground truth labels (0 or 1).
-        weights: jnp.ndarray of shape (num_classes,), weights to apply to each class.
+        logits (jnp.ndarray): Unnormalized log probabilities with shape [N, C, H, W],
+                              where N is the batch size, C is the number of classes,
+                              H and W are the height and width of the input.
+        labels (jnp.ndarray): One-hot encoded ground truth labels with shape [N, C, H, W].
+        weights (Optional[jnp.ndarray]): Class weights with shape [C]. Each element
+                                         corresponds to the weight of a class.
 
     Returns:
-        loss: the weighted binary cross-entropy loss.
+        jnp.ndarray: A scalar representing the mean weighted softmax cross-entropy loss.
     """
+    # Compute log softmax over the class (channel) dimension
+    log_probs = jax.nn.log_softmax(logits, axis=1)  # Shape: [N, C, H, W]
 
-    # Compute binary cross-entropy loss for each element
-    bce_loss = - (targets * jnp.clip(jnp.log(predictions), min = -100) + (1 - targets) * jnp.clip(jnp.log(1 - predictions), min = -100))
+    # Compute the negative log likelihood
+    loss = -jnp.sum(labels * log_probs, axis=1)  # Shape: [N, H, W]
 
-    # Apply weights if provided
     if weights is not None:
-        # Reshape weights to match the shape of the bce_loss (batch, num_classes, h, w)
-        weights = weights.reshape((1, -1, 1, 1))  # Reshape to (1, num_classes, 1, 1)
-        bce_loss = bce_loss * weights
+        # Ensure weights have shape [C]
+        weights = weights.reshape((1, -1, 1, 1))  # Shape: [1, C, 1, 1]
 
-    return jnp.mean(bce_loss)
+        # Compute weighted loss by multiplying each class's loss with its weight
+        loss = loss * jnp.sum(labels * weights, axis=1)  # Shape: [N, H, W]
 
+    # Compute the mean loss over all pixels and the batch
+    return loss.mean()
+
+def label_smoothing(
+    labels: jnp.ndarray,
+    epsilon: float = 0.1
+) -> jnp.ndarray:
+    """
+    Applies label smoothing to one-hot encoded labels.
+
+    Args:
+        labels (jnp.ndarray): One-hot encoded labels with shape [N, C, H, W].
+        epsilon (float): Smoothing factor. The smoothing is applied as:
+                         labels = labels * (1 - epsilon) + (epsilon / C)
+
+    Returns:
+        jnp.ndarray: Smoothed labels with the same shape as input.
+    """
+    num_classes = labels.shape[1]
+    return labels * (1.0 - epsilon) + (epsilon / num_classes)
+
+# Updated batch_loss_fn for Multi-Class
 def batch_loss_fn(
     model: eqx.Module,
     state: eqx.nn.State,
-    x_true: Float[Array, " N C H W"],
-    y_true: Int[Array, " N C H W"],
+    x_true: Float[Array, "N C H W"],
+    y_true: Int[Array, "N H W"],  # Class indices
     weights: Float[Array, "C"],
-    loss_fn: Callable[[Float[Array, "N C H W"], Int[Array, "N C H W"], Float[Array, "C"]], Float[Array, "..."]],
+    loss_fn: Callable[[Float[Array, "N C H W"], Int[Array, "N H W"], Float[Array, "C"]], Float[Array, "..."]],
 ) -> PyTree[Float[Array, "..."]]:
+    """
+    Computes the loss for a batch.
 
+    Args:
+        model: The neural network model.
+        state: The state associated with the model.
+        x_true: Input images.
+        y_true: Ground truth labels as class indices.
+        weights: Class weights.
+        loss_fn: The loss function to use.
+
+    Returns:
+        Tuple of (loss, new_state).
+    """
     batch_model = jax.vmap(
         model, axis_name='batch', in_axes=(0,None), out_axes=(0,None)
     )
     y_pred, new_state = batch_model(x_true, state)
+    # Compute loss
     loss = loss_fn(y_pred, y_true, weights)
 
     return loss, new_state
+
 
 
 def compute_class_frequencies(

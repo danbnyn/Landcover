@@ -12,9 +12,8 @@ import yaml
 import numpy as np
 
 from src.models.resunet import ResUnet
-from src.models.unet import UNet
 from src.trainers.trainer import train_model
-from src.utils.losses import batch_loss_fn, create_loss_fn, weighted_bce_loss
+from src.utils.losses import batch_loss_fn, create_loss_fn
 from src.data.data_loader import create_iterator, Shard
 from src.utils.checkpoint import CheckpointManager
 from src.utils.losses import compute_class_frequencies, process_weights
@@ -116,8 +115,7 @@ def main(config_path: str):
         in_channels=config['model']['in_channels'],
         out_channels=out_channels,
         n_filters=config['model']['n_filters'],
-        key=jax.random.key(seed)
-        # depth=config['model']['depth']
+        key=jax.random.key(seed),
     )
 
     # Set up optimizer
